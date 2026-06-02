@@ -58,14 +58,12 @@ fn check_ref(
             reference: reference.to_string(),
             context: context.to_string(),
         }),
-        Some(disk) if disk.disk_type != expected => {
-            errors.push(ValidationError::WrongDiskType {
-                id: disk.id.clone(),
-                expected,
-                actual: disk.disk_type,
-                context: context.to_string(),
-            })
-        }
+        Some(disk) if disk.disk_type != expected => errors.push(ValidationError::WrongDiskType {
+            id: disk.id.clone(),
+            expected,
+            actual: disk.disk_type,
+            context: context.to_string(),
+        }),
         Some(_) => {}
     }
 }
@@ -78,7 +76,13 @@ fn check_profile(
     writeback: &str,
     who: &str,
 ) {
-    check_ref(errors, by_id, system, DiskType::Image, &format!("{who}.system"));
+    check_ref(
+        errors,
+        by_id,
+        system,
+        DiskType::Image,
+        &format!("{who}.system"),
+    );
     for g in games {
         check_ref(errors, by_id, g, DiskType::Game, &format!("{who}.games"));
     }
@@ -213,7 +217,10 @@ writeback = "wb"
         let errs = validate(&cfg).unwrap_err().0;
         assert!(errs.iter().any(|e| matches!(
             e,
-            ValidationError::WrongDiskType { expected: DiskType::Image, .. }
+            ValidationError::WrongDiskType {
+                expected: DiskType::Image,
+                ..
+            }
         )));
     }
 
