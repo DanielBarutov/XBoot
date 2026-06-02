@@ -4,7 +4,6 @@ use std::io;
 /// Read exactly `buf.len()` bytes starting at byte `offset`, using a positioned
 /// read that does not move (and is unaffected by) the file's cursor — safe to
 /// call concurrently through a shared `&File`.
-#[allow(dead_code)]
 #[cfg(unix)]
 pub(crate) fn read_exact_at(file: &File, offset: u64, buf: &mut [u8]) -> io::Result<()> {
     use std::os::unix::fs::FileExt;
