@@ -1,0 +1,15 @@
+[package]
+name = "xboot"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "xboot"
+path = "src/main.rs"
+
+[dependencies]
+xboot-core = { path = "../xboot-core" }
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
