@@ -4,12 +4,10 @@ use crate::storage::invalid_data;
 
 /// Disk types we care about.
 pub(crate) const DISK_TYPE_FIXED: u32 = 2;
-#[allow(dead_code)] // used by DynamicVhd; removed when Vhd::open is wired in Task 9
 pub(crate) const DISK_TYPE_DYNAMIC: u32 = 3;
 
 /// The parsed fields of a 512-byte VHD footer that we use.
 pub(crate) struct VhdFooter {
-    #[allow(dead_code)] // read by DynamicVhd::open; removed when Vhd::open is wired in Task 9
     pub data_offset: u64,
     pub current_size: u64,
     pub disk_type: u32,

@@ -7,12 +7,9 @@ use crate::storage::file_ext::read_exact_at;
 use crate::storage::vhd::footer::{VhdFooter, DISK_TYPE_DYNAMIC};
 use crate::storage::{invalid_data, BackingStore};
 
-#[allow(dead_code)]
 const SECTOR: u64 = 512;
 
 /// Dynamic VHD: footer + dynamic header + BAT + sparse blocks.
-// removed in Task 9 when Vhd::open constructs it
-#[allow(dead_code)]
 pub struct DynamicVhd {
     file: File,
     virtual_size: u64,
@@ -22,16 +19,13 @@ pub struct DynamicVhd {
     bat: Vec<u32>,
 }
 
-#[allow(dead_code)]
 fn be_u32(b: &[u8]) -> u32 {
     u32::from_be_bytes([b[0], b[1], b[2], b[3]])
 }
-#[allow(dead_code)]
 fn be_u64(b: &[u8]) -> u64 {
     u64::from_be_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]])
 }
 
-#[allow(dead_code)]
 impl DynamicVhd {
     /// Open a dynamic VHD read-only. Parses the footer, dynamic header, and BAT.
     pub fn open(path: &Path) -> io::Result<Self> {

@@ -8,7 +8,6 @@ mod vhd;
 mod vhdx;
 
 pub use raw::RawFile;
-pub use vhd::FixedVhd;
 pub use vhd::Vhd;
 pub use vhdx::Vhdx;
 
