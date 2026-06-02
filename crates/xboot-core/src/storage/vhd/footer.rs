@@ -3,29 +3,25 @@ use std::io;
 use crate::storage::invalid_data;
 
 /// Disk types we care about.
-#[allow(dead_code)]
 pub(crate) const DISK_TYPE_FIXED: u32 = 2;
 #[allow(dead_code)]
 pub(crate) const DISK_TYPE_DYNAMIC: u32 = 3;
 
 /// The parsed fields of a 512-byte VHD footer that we use.
-#[allow(dead_code)]
 pub(crate) struct VhdFooter {
+    #[allow(dead_code)] // used in Task 9 (dynamic VHD)
     pub data_offset: u64,
     pub current_size: u64,
     pub disk_type: u32,
 }
 
-#[allow(dead_code)]
 fn be_u32(b: &[u8]) -> u32 {
     u32::from_be_bytes([b[0], b[1], b[2], b[3]])
 }
-#[allow(dead_code)]
 fn be_u64(b: &[u8]) -> u64 {
     u64::from_be_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]])
 }
 
-#[allow(dead_code)]
 impl VhdFooter {
     /// Parse and validate a footer from at least 512 bytes.
     pub(crate) fn parse(bytes: &[u8]) -> io::Result<Self> {
