@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::config::{Config, Disk, DiskType};
 
@@ -26,6 +26,8 @@ pub enum ValidationError {
     },
     #[error("invalid MAC address: {0}")]
     InvalidMac(String),
+    #[error("duplicate client MAC address: {0}")]
+    DuplicateMac(String),
 }
 
 /// Collection of validation errors with a readable multi-line `Display`.
@@ -106,9 +108,12 @@ pub fn validate(cfg: &Config) -> Result<(), ValidationErrors> {
         }
     }
 
+    let mut seen_macs: HashSet<&str> = HashSet::new();
     for c in &cfg.clients {
         if !is_valid_mac(&c.mac) {
             errors.push(ValidationError::InvalidMac(c.mac.clone()));
+        } else if !seen_macs.insert(c.mac.as_str()) {
+            errors.push(ValidationError::DuplicateMac(c.mac.clone()));
         }
         let who = format!("client '{}'", c.name.as_deref().unwrap_or(&c.mac));
         check_profile(&mut errors, &by_id, &c.system, &c.games, &c.writeback, &who);
@@ -269,6 +274,37 @@ writeback = "wb"
         assert!(errs
             .iter()
             .any(|e| matches!(e, ValidationError::InvalidMac(m) if m == "NOT-A-MAC")));
+    }
+
+    #[test]
+    fn detects_duplicate_mac() {
+        let cfg = parse(
+            r#"
+[[disk]]
+id = "img"
+type = "image"
+backing = "x"
+ram_cache = "1GB"
+[[disk]]
+id = "wb"
+type = "writeback"
+backing = "z"
+ram_cache = "1GB"
+policy = "volatile"
+[[client]]
+mac = "AA:BB:CC:DD:EE:01"
+system = "img"
+writeback = "wb"
+[[client]]
+mac = "AA:BB:CC:DD:EE:01"
+system = "img"
+writeback = "wb"
+"#,
+        );
+        let errs = validate(&cfg).unwrap_err().0;
+        assert!(errs.contains(&ValidationError::DuplicateMac(
+            "AA:BB:CC:DD:EE:01".to_string()
+        )));
     }
 
     #[test]

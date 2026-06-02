@@ -38,3 +38,14 @@ writeback = "wb"
     let output = Command::new(bin).arg(&path).output().unwrap();
     assert_eq!(output.status.code(), Some(0));
 }
+
+#[test]
+fn missing_config_exits_with_error() {
+    let bin = env!("CARGO_BIN_EXE_xboot");
+    let output = Command::new(bin)
+        .arg("/no/such/xboot/config.toml")
+        .output()
+        .unwrap();
+    // Error path: non-zero, and distinct from the usage exit code (2).
+    assert_eq!(output.status.code(), Some(1));
+}

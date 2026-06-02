@@ -66,9 +66,20 @@ mod tests {
     }
 
     #[test]
+    fn parses_plain_byte_suffix() {
+        assert_eq!(parse_size("1B").unwrap(), 1);
+    }
+
+    #[test]
     fn rejects_garbage() {
         assert!(parse_size("abc").is_err());
         assert!(parse_size("").is_err());
         assert!(parse_size("1.5GB").is_err());
+    }
+
+    #[test]
+    fn rejects_overflow() {
+        // 16777216 * 1024^4 == 2^64, which overflows u64.
+        assert_eq!(parse_size("16777216TB"), Err(SizeParseError::Overflow));
     }
 }
