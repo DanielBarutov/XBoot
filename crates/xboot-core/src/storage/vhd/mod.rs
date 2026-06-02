@@ -1,6 +1,7 @@
 // Backing-store implementations for VHD. Open dispatch added in Task 9.
 pub struct Vhd;
 
+mod dynamic;
 mod fixed;
 mod footer;
 

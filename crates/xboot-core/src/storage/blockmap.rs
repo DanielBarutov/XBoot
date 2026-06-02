@@ -3,7 +3,7 @@ use std::io;
 use super::invalid_data;
 
 /// Where an allocation unit's data lives.
-#[allow(dead_code)]
+#[allow(dead_code)] // used by DynamicVhd; removed when Vhd::open is wired in Task 9
 pub(crate) enum Unit {
     /// Unit is unallocated — reads as zeros.
     Zero,
@@ -16,7 +16,7 @@ pub(crate) enum Unit {
 /// is; `read_phys(file_offset, dst)` reads `dst.len()` bytes from the file.
 ///
 /// `offset + buf.len()` must not exceed `virtual_size`.
-#[allow(dead_code)]
+#[allow(dead_code)] // used by DynamicVhd; removed when Vhd::open is wired in Task 9
 pub(crate) fn read_units(
     offset: u64,
     buf: &mut [u8],
