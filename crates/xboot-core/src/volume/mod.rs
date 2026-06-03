@@ -99,6 +99,11 @@ impl Volume {
         }
         Ok(())
     }
+
+    /// Discard the client's overlay (volatile reboot); reads return the master.
+    pub fn reset(&self) {
+        self.overlay.reset();
+    }
 }
 
 #[cfg(test)]
@@ -272,5 +277,47 @@ mod tests {
         v.read_at(5000, &mut buf).unwrap();
         let expect: Vec<u8> = (5000..5004).map(|i| (i % 256) as u8).collect();
         assert_eq!(buf.to_vec(), expect);
+    }
+
+    use std::sync::Arc;
+
+    /// Wrapper to share one master between several Volumes via Arc.
+    struct ArcStore(Arc<dyn BackingStore>);
+    impl BackingStore for ArcStore {
+        fn size_bytes(&self) -> u64 {
+            self.0.size_bytes()
+        }
+        fn read_at(&self, offset: u64, buf: &mut [u8]) -> io::Result<()> {
+            self.0.read_at(offset, buf)
+        }
+    }
+
+    #[test]
+    fn reset_discards_writes_and_restores_master() {
+        let v = vol(ramp(10_000));
+        v.write_at(0, &[0x77; 16]).unwrap();
+        v.reset();
+        let mut buf = [0u8; 16];
+        v.read_at(0, &mut buf).unwrap();
+        let expect: Vec<u8> = (0..16u8).collect();
+        assert_eq!(buf.to_vec(), expect);
+    }
+
+    #[test]
+    fn two_volumes_share_master_but_isolate_writes() {
+        let master: Arc<dyn BackingStore> = Arc::new(Mem(ramp(10_000)));
+        let a = Volume::new(Box::new(ArcStore(master.clone())), Box::new(RamOverlay::new()));
+        let b = Volume::new(Box::new(ArcStore(master.clone())), Box::new(RamOverlay::new()));
+
+        a.write_at(0, &[0x99; 8]).unwrap();
+
+        // b never sees a's write.
+        let mut buf = [0u8; 8];
+        b.read_at(0, &mut buf).unwrap();
+        assert_eq!(buf.to_vec(), (0..8u8).collect::<Vec<_>>());
+
+        // a does see its own write.
+        a.read_at(0, &mut buf).unwrap();
+        assert_eq!(buf, [0x99; 8]);
     }
 }
