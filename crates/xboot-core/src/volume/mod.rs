@@ -185,7 +185,9 @@ mod tests {
         let v = vol(ramp(n));
         let mut buf = [0u8; 100];
         v.read_at(BLOCK, &mut buf).unwrap();
-        let expect: Vec<u8> = (0..100).map(|i| ((BLOCK as usize + i) % 256) as u8).collect();
+        let expect: Vec<u8> = (0..100)
+            .map(|i| ((BLOCK as usize + i) % 256) as u8)
+            .collect();
         assert_eq!(buf.to_vec(), expect);
     }
 
@@ -257,7 +259,9 @@ mod tests {
         v.write_at(BLOCK + 10, &[0x44; 5]).unwrap();
         let mut buf = [0u8; 100];
         v.read_at(BLOCK, &mut buf).unwrap();
-        let mut expect: Vec<u8> = (0..100).map(|i| ((BLOCK as usize + i) % 256) as u8).collect();
+        let mut expect: Vec<u8> = (0..100)
+            .map(|i| ((BLOCK as usize + i) % 256) as u8)
+            .collect();
         expect[10..15].copy_from_slice(&[0x44; 5]);
         assert_eq!(buf.to_vec(), expect);
     }
@@ -312,8 +316,14 @@ mod tests {
     #[test]
     fn two_volumes_share_master_but_isolate_writes() {
         let master: Arc<dyn BackingStore> = Arc::new(Mem(ramp(10_000)));
-        let a = Volume::new(Box::new(ArcStore(master.clone())), Box::new(RamOverlay::new()));
-        let b = Volume::new(Box::new(ArcStore(master.clone())), Box::new(RamOverlay::new()));
+        let a = Volume::new(
+            Box::new(ArcStore(master.clone())),
+            Box::new(RamOverlay::new()),
+        );
+        let b = Volume::new(
+            Box::new(ArcStore(master.clone())),
+            Box::new(RamOverlay::new()),
+        );
 
         a.write_at(0, &[0x99; 8]).unwrap();
 
