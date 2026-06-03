@@ -284,6 +284,70 @@ mod tests {
 
         assert!(after_one.bytes <= 3 * BLOCK);
     }
+
+    use crate::volume::{RamOverlay, Volume};
+    use std::sync::Arc;
+    use std::thread;
+
+    /// Share one `Arc<CachedStore>` as a `Box<dyn BackingStore>` for `Volume`.
+    struct ArcStore(Arc<dyn BackingStore>);
+    impl BackingStore for ArcStore {
+        fn size_bytes(&self) -> u64 {
+            self.0.size_bytes()
+        }
+        fn read_at(&self, offset: u64, buf: &mut [u8]) -> io::Result<()> {
+            self.0.read_at(offset, buf)
+        }
+    }
+
+    #[test]
+    fn concurrent_readers_get_correct_data_within_budget() {
+        // 8 full blocks, budget = 4 blocks, 8 threads each read the whole disk.
+        let n = 8 * BLOCK as usize;
+        let c: Arc<CachedStore> = Arc::new(cached(n, 4 * BLOCK));
+        let mut handles = Vec::new();
+        for _ in 0..8 {
+            let c = c.clone();
+            handles.push(thread::spawn(move || {
+                let mut buf = vec![0u8; n];
+                c.read_at(0, &mut buf).unwrap();
+                assert_eq!(buf, ramp(n));
+            }));
+        }
+        for h in handles {
+            h.join().unwrap();
+        }
+        // Budget invariant holds after concurrent load.
+        assert!(c.stats().bytes <= 4 * BLOCK);
+    }
+
+    #[test]
+    fn volume_reads_through_cache_unmodified() {
+        let n = 10_000usize;
+        let c: Arc<CachedStore> = Arc::new(cached(n, 1 << 20));
+        let master: Arc<dyn BackingStore> = c.clone();
+        let v = Volume::new(Box::new(ArcStore(master)), Box::new(RamOverlay::new()));
+
+        // First volume read populates the cache from the master.
+        let mut buf = [0u8; 5];
+        v.read_at(100, &mut buf).unwrap();
+        assert_eq!(buf, [100, 101, 102, 103, 104]);
+        assert_eq!(c.stats().misses, 1);
+
+        // Second read of the same region is served from the cache.
+        v.read_at(100, &mut buf).unwrap();
+        assert_eq!(buf, [100, 101, 102, 103, 104]);
+        assert_eq!(c.stats().hits, 1);
+
+        // A write goes to the overlay, never the cached master: reading it back
+        // does not touch the master (miss count for that block is unchanged).
+        v.write_at(200, &[0xAB; 4]).unwrap();
+        let misses_before = c.stats().misses;
+        let mut wbuf = [0u8; 4];
+        v.read_at(200, &mut wbuf).unwrap();
+        assert_eq!(wbuf, [0xAB; 4]);
+        assert_eq!(c.stats().misses, misses_before);
+    }
 }
 
 #[cfg(test)]
