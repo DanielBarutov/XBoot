@@ -285,3 +285,49 @@ mod tests {
         assert!(after_one.bytes <= 3 * BLOCK);
     }
 }
+
+#[cfg(test)]
+mod prop {
+    use super::*;
+    use proptest::collection as pcoll;
+    use proptest::prelude::*;
+
+    struct Mem(Vec<u8>);
+    impl BackingStore for Mem {
+        fn size_bytes(&self) -> u64 {
+            self.0.len() as u64
+        }
+        fn read_at(&self, offset: u64, buf: &mut [u8]) -> io::Result<()> {
+            let s = offset as usize;
+            buf.copy_from_slice(&self.0[s..s + buf.len()]);
+            Ok(())
+        }
+    }
+
+    const SIZE: usize = 12 * BLOCK as usize + 77; // several blocks + short tail
+    const BUDGET: u64 = 5 * BLOCK; // forces eviction under load
+
+    fn read_strategy() -> impl Strategy<Value = (usize, usize)> {
+        (0..SIZE, 0..(2 * BLOCK as usize)).prop_map(|(offset, len)| {
+            let len = len.min(SIZE - offset);
+            (offset, len)
+        })
+    }
+
+    proptest! {
+        #[test]
+        fn cache_is_transparent_and_respects_budget(
+            reads in pcoll::vec(read_strategy(), 0..300)
+        ) {
+            let master: Vec<u8> = (0..SIZE).map(|i| (i % 256) as u8).collect();
+            let c = CachedStore::new(Box::new(Mem(master.clone())), BUDGET);
+
+            for (offset, len) in reads {
+                let mut got = vec![0u8; len];
+                c.read_at(offset as u64, &mut got).unwrap();
+                prop_assert_eq!(&got, &master[offset..offset + len]);
+                prop_assert!(c.stats().bytes <= BUDGET);
+            }
+        }
+    }
+}
