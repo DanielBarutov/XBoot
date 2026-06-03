@@ -479,4 +479,53 @@ mod tests {
         r[10..14].copy_from_slice(&1u32.to_be_bytes());
         assert_eq!(t.execute(&cmd(lun_field(0), r), &[]).data, payload);
     }
+
+    #[test]
+    fn sync_cache_and_medium_and_start_stop_are_good() {
+        let t = target(vec![0u8; 4096]);
+        for op_code in [op::SYNC_CACHE_10, op::SYNC_CACHE_16, op::PREVENT_ALLOW, op::START_STOP_UNIT] {
+            let mut cdb = [0u8; 16];
+            cdb[0] = op_code;
+            let out = t.execute(&cmd(lun_field(0), cdb), &[]);
+            assert_eq!(out.status, sense::GOOD, "opcode {op_code:#x}");
+            assert!(out.sense.is_empty());
+        }
+    }
+
+    #[test]
+    fn request_sense_returns_no_sense() {
+        let t = target(vec![0u8; 4096]);
+        let mut cdb = [0u8; 16];
+        cdb[0] = op::REQUEST_SENSE;
+        let out = t.execute(&cmd(lun_field(0), cdb), &[]);
+        assert_eq!(out.status, sense::GOOD); // sense rides in the data-in buffer
+        assert_eq!(out.data.len(), 18);
+        assert_eq!(out.data[0], 0x70);
+        assert_eq!(out.data[2] & 0x0f, sense::NO_SENSE);
+    }
+
+    #[test]
+    fn mode_sense_6_returns_header() {
+        let t = target(vec![0u8; 4096]);
+        let mut cdb = [0u8; 16];
+        cdb[0] = op::MODE_SENSE_6;
+        let out = t.execute(&cmd(lun_field(0), cdb), &[]);
+        assert_eq!(out.status, sense::GOOD);
+        assert_eq!(out.data.len(), 4); // bare 4-byte header, no block descriptors
+        assert_eq!(out.data[0], 3); // mode data length = len - 1
+    }
+
+    #[test]
+    fn mode_sense_6_caching_page_sets_wce() {
+        let t = target(vec![0u8; 4096]);
+        let mut cdb = [0u8; 16];
+        cdb[0] = op::MODE_SENSE_6;
+        cdb[2] = 0x08; // caching mode page
+        let out = t.execute(&cmd(lun_field(0), cdb), &[]);
+        assert_eq!(out.status, sense::GOOD);
+        // 4-byte header + 20-byte caching page.
+        assert_eq!(out.data.len(), 24);
+        assert_eq!(out.data[4], 0x08); // page code
+        assert_eq!(out.data[6] & 0x04, 0x04); // WCE
+    }
 }

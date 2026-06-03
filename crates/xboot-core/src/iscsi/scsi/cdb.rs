@@ -72,8 +72,49 @@ pub(super) fn dispatch(lu: &LogicalUnit, cmd: &ScsiCommand, write_data: &[u8]) -
         op::READ_16 => read(lu, lba64(cdb), len32_16(cdb)),
         op::WRITE_10 => write(lu, lba32(cdb), len16(cdb), write_data),
         op::WRITE_16 => write(lu, lba64(cdb), len32_16(cdb), write_data),
+        op::SYNC_CACHE_10 | op::SYNC_CACHE_16 => ScsiOutcome::ok(),
+        op::PREVENT_ALLOW | op::START_STOP_UNIT => ScsiOutcome::ok(),
+        op::REQUEST_SENSE => request_sense(),
+        op::MODE_SENSE_6 | op::MODE_SENSE_10 => mode_sense(cdb),
         _ => ScsiOutcome::check(sense::ILLEGAL_REQUEST, sense::ASC_INVALID_OPCODE),
     }
+}
+
+fn request_sense() -> ScsiOutcome {
+    // No retained contingent allegiance (iSCSI delivers sense inline via the
+    // SCSI Response), so report NO SENSE in the data-in buffer with GOOD status.
+    ScsiOutcome::good(sense::fixed_sense(sense::NO_SENSE, 0x00, 0x00))
+}
+
+fn mode_sense(cdb: &[u8; 16]) -> ScsiOutcome {
+    let ten = cdb[0] == op::MODE_SENSE_10;
+    let page_code = cdb[2] & 0x3f;
+    let mut pages = Vec::new();
+    if page_code == 0x08 || page_code == 0x3f {
+        pages.extend_from_slice(&caching_page());
+    }
+    let data = if ten {
+        let mut d = vec![0u8; 8]; // 8-byte header, no block descriptors
+        let mode_len = (6 + pages.len()) as u16; // total - 2
+        d[0..2].copy_from_slice(&mode_len.to_be_bytes());
+        d.extend_from_slice(&pages);
+        d
+    } else {
+        let mut d = vec![0u8; 4]; // 4-byte header, no block descriptors
+        d[0] = (3 + pages.len()) as u8; // mode data length = total - 1
+        d.extend_from_slice(&pages);
+        d
+    };
+    ScsiOutcome::good(data)
+}
+
+/// Minimal caching mode page (0x08): 20 bytes, WCE = 1 (write-back enabled).
+fn caching_page() -> Vec<u8> {
+    let mut p = vec![0u8; 20];
+    p[0] = 0x08; // page code
+    p[1] = 0x12; // page length (18)
+    p[2] = 0x04; // WCE = 1
+    p
 }
 
 fn write(lu: &LogicalUnit, lba: u64, blocks: u64, write_data: &[u8]) -> ScsiOutcome {
