@@ -22,11 +22,19 @@ pub struct ScsiOutcome {
 impl ScsiOutcome {
     /// GOOD status, no data.
     pub(crate) fn ok() -> Self {
-        Self { status: sense::GOOD, data: Vec::new(), sense: Vec::new() }
+        Self {
+            status: sense::GOOD,
+            data: Vec::new(),
+            sense: Vec::new(),
+        }
     }
     /// GOOD status carrying a data-in payload.
     pub(crate) fn good(data: Vec<u8>) -> Self {
-        Self { status: sense::GOOD, data, sense: Vec::new() }
+        Self {
+            status: sense::GOOD,
+            data,
+            sense: Vec::new(),
+        }
     }
     /// CHECK CONDITION with fixed-format sense.
     pub(crate) fn check(key: u8, (asc, ascq): (u8, u8)) -> Self {
@@ -137,7 +145,9 @@ impl ScsiTarget {
     pub fn execute(&self, cmd: &ScsiCommand, write_data: &[u8]) -> ScsiOutcome {
         let lu = match lun_number(cmd.lun).and_then(|n| self.luns.get(n).and_then(|o| o.as_ref())) {
             Some(lu) => lu,
-            None => return ScsiOutcome::check(sense::ILLEGAL_REQUEST, sense::ASC_LUN_NOT_SUPPORTED),
+            None => {
+                return ScsiOutcome::check(sense::ILLEGAL_REQUEST, sense::ASC_LUN_NOT_SUPPORTED)
+            }
         };
         if cmd.cdb[0] == cdb::op::REPORT_LUNS {
             return self.report_luns();
@@ -335,8 +345,14 @@ mod tests {
         let out = t.execute(&cmd(lun_field(0), cdb), &[]);
         assert_eq!(out.status, sense::GOOD);
         assert_eq!(out.data.len(), 8);
-        assert_eq!(u32::from_be_bytes([out.data[0], out.data[1], out.data[2], out.data[3]]), 7);
-        assert_eq!(u32::from_be_bytes([out.data[4], out.data[5], out.data[6], out.data[7]]), 512);
+        assert_eq!(
+            u32::from_be_bytes([out.data[0], out.data[1], out.data[2], out.data[3]]),
+            7
+        );
+        assert_eq!(
+            u32::from_be_bytes([out.data[4], out.data[5], out.data[6], out.data[7]]),
+            512
+        );
     }
 
     #[test]
@@ -472,7 +488,10 @@ mod tests {
         w[0] = op::WRITE_16;
         // LBA 0, 1 block at 10..14
         w[10..14].copy_from_slice(&1u32.to_be_bytes());
-        assert_eq!(t.execute(&cmd(lun_field(0), w), &payload).status, sense::GOOD);
+        assert_eq!(
+            t.execute(&cmd(lun_field(0), w), &payload).status,
+            sense::GOOD
+        );
 
         let mut r = [0u8; 16];
         r[0] = op::READ_16;
@@ -483,7 +502,12 @@ mod tests {
     #[test]
     fn sync_cache_and_medium_and_start_stop_are_good() {
         let t = target(vec![0u8; 4096]);
-        for op_code in [op::SYNC_CACHE_10, op::SYNC_CACHE_16, op::PREVENT_ALLOW, op::START_STOP_UNIT] {
+        for op_code in [
+            op::SYNC_CACHE_10,
+            op::SYNC_CACHE_16,
+            op::PREVENT_ALLOW,
+            op::START_STOP_UNIT,
+        ] {
             let mut cdb = [0u8; 16];
             cdb[0] = op_code;
             let out = t.execute(&cmd(lun_field(0), cdb), &[]);

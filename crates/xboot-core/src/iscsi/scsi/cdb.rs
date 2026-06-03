@@ -33,8 +33,14 @@ fn be32(b: &[u8; 16], off: usize) -> u32 {
 }
 fn be64(b: &[u8; 16], off: usize) -> u64 {
     u64::from_be_bytes([
-        b[off], b[off + 1], b[off + 2], b[off + 3],
-        b[off + 4], b[off + 5], b[off + 6], b[off + 7],
+        b[off],
+        b[off + 1],
+        b[off + 2],
+        b[off + 3],
+        b[off + 4],
+        b[off + 5],
+        b[off + 6],
+        b[off + 7],
     ])
 }
 
@@ -161,7 +167,11 @@ fn read_capacity_10(lu: &LogicalUnit) -> ScsiOutcome {
     let last = lu.total_blocks().saturating_sub(1);
     // If the disk has more than 2^32 blocks, report 0xFFFFFFFF so the
     // initiator falls back to READ CAPACITY(16).
-    let returned = if last > u32::MAX as u64 { u32::MAX } else { last as u32 };
+    let returned = if last > u32::MAX as u64 {
+        u32::MAX
+    } else {
+        last as u32
+    };
     let mut d = vec![0u8; 8];
     d[0..4].copy_from_slice(&returned.to_be_bytes());
     d[4..8].copy_from_slice(&lu.block_size.to_be_bytes());
