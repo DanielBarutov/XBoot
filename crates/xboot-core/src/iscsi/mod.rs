@@ -3,9 +3,13 @@
 //! Pure, synchronous bytes <-> typed structs. No I/O, no session state. Session
 //! sequencing lives in phase 05c; SCSI CDB interpretation in phase 05b.
 
-// mod pdu;            // re-enabled in Task 3
+mod pdu;
 pub mod text;
-// pub use pdu::{ ... }; // re-enabled in Task 3
+
+pub use pdu::{
+    decode, LoginRequest, LogoutRequest, NopOut, Request, ScsiCommand, ScsiDataOut, TaskMgmt,
+    TextRequest,
+};
 
 use thiserror::Error;
 
@@ -54,9 +58,6 @@ pub enum PduError {
 }
 
 /// Padding needed to round `n` bytes up to a 4-byte boundary.
-// `#[allow(dead_code)]` is needed only in Task 1, where no non-test code uses
-// `pad4` yet. Remove this attribute in Task 3, where `decode` calls it.
-#[allow(dead_code)]
 pub(crate) fn pad4(n: usize) -> usize {
     (4 - (n % 4)) % 4
 }
