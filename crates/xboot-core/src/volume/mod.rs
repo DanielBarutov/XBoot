@@ -69,6 +69,36 @@ impl Volume {
         }
         Ok(())
     }
+    /// Write `buf` starting at byte `offset` into the overlay, block by block.
+    /// A block fully covered by the range is stored directly; a partially
+    /// covered block is read-modified-written (from the overlay if present,
+    /// else from the master) so untouched bytes are preserved.
+    pub fn write_at(&self, offset: u64, buf: &[u8]) -> io::Result<()> {
+        self.check_bounds(offset, buf.len())?;
+        let mut pos = offset;
+        let mut done = 0usize;
+        while done < buf.len() {
+            let blk = pos / BLOCK;
+            let within = (pos % BLOCK) as usize;
+            let blen = self.block_len(blk);
+            let take = std::cmp::min(blen - within, buf.len() - done);
+            let src = &buf[done..done + take];
+
+            if take == blen {
+                self.overlay.write_block(blk, src);
+            } else {
+                let mut block = vec![0u8; blen];
+                if !self.overlay.read_block(blk, &mut block) {
+                    self.master.read_at(blk * BLOCK, &mut block)?;
+                }
+                block[within..within + take].copy_from_slice(src);
+                self.overlay.write_block(blk, &block);
+            }
+            pos += take as u64;
+            done += take;
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -160,5 +190,87 @@ mod tests {
         let v = vol(ramp(10));
         let mut buf = [0u8; 5];
         assert!(v.read_at(8, &mut buf).is_err());
+    }
+
+    #[test]
+    fn write_full_block_then_read() {
+        let v = vol(ramp(10_000));
+        let data = [0xCD; BLOCK as usize];
+        v.write_at(0, &data).unwrap();
+        let mut buf = [0u8; BLOCK as usize];
+        v.read_at(0, &mut buf).unwrap();
+        assert_eq!(buf.to_vec(), data.to_vec());
+    }
+
+    #[test]
+    fn write_partial_new_block_does_rmw() {
+        // Write 4 bytes in the middle of block 0 (not yet in overlay).
+        // The rest of the block must still read back as the master's bytes.
+        let v = vol(ramp(10_000));
+        v.write_at(10, &[0xEE; 4]).unwrap();
+        let mut buf = [0u8; 20];
+        v.read_at(0, &mut buf).unwrap();
+        let mut expect: Vec<u8> = (0..20u8).collect();
+        expect[10..14].copy_from_slice(&[0xEE; 4]);
+        assert_eq!(buf.to_vec(), expect);
+    }
+
+    #[test]
+    fn write_partial_existing_block_patches() {
+        let v = vol(ramp(10_000));
+        v.write_at(0, &[0x11; 8]).unwrap(); // block 0 now in overlay (partial)
+        v.write_at(2, &[0x22; 2]).unwrap(); // patch existing overlay block
+        let mut buf = [0u8; 8];
+        v.read_at(0, &mut buf).unwrap();
+        assert_eq!(buf, [0x11, 0x11, 0x22, 0x22, 0x11, 0x11, 0x11, 0x11]);
+    }
+
+    #[test]
+    fn write_spans_two_blocks() {
+        let v = vol(ramp(10_000));
+        // 8-byte write straddling the block 0/1 boundary.
+        v.write_at(BLOCK - 4, &[0x33; 8]).unwrap();
+        let mut buf = [0u8; 8];
+        v.read_at(BLOCK - 4, &mut buf).unwrap();
+        assert_eq!(buf, [0x33; 8]);
+        // bytes just before and after are untouched master bytes
+        let mut before = [0u8; 1];
+        v.read_at(BLOCK - 5, &mut before).unwrap();
+        assert_eq!(before[0], ((BLOCK as usize - 5) % 256) as u8);
+    }
+
+    #[test]
+    fn write_tail_block() {
+        let n = BLOCK as usize + 100;
+        let v = vol(ramp(n));
+        v.write_at(BLOCK + 10, &[0x44; 5]).unwrap();
+        let mut buf = [0u8; 100];
+        v.read_at(BLOCK, &mut buf).unwrap();
+        let mut expect: Vec<u8> = (0..100).map(|i| ((BLOCK as usize + i) % 256) as u8).collect();
+        expect[10..15].copy_from_slice(&[0x44; 5]);
+        assert_eq!(buf.to_vec(), expect);
+    }
+
+    #[test]
+    fn write_zero_len_is_ok() {
+        let v = vol(ramp(10));
+        v.write_at(10, &[]).unwrap();
+    }
+
+    #[test]
+    fn write_out_of_range_errors() {
+        let v = vol(ramp(10));
+        assert!(v.write_at(8, &[0u8; 5]).is_err());
+    }
+
+    #[test]
+    fn write_never_touches_master_bytes_outside_overlay() {
+        // After a partial write, reading an untouched later block returns master.
+        let v = vol(ramp(10_000));
+        v.write_at(0, &[0x55; 4]).unwrap();
+        let mut buf = [0u8; 4];
+        v.read_at(5000, &mut buf).unwrap();
+        let expect: Vec<u8> = (5000..5004).map(|i| (i % 256) as u8).collect();
+        assert_eq!(buf.to_vec(), expect);
     }
 }
