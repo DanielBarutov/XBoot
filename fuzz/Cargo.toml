@@ -23,3 +23,9 @@ name = "open_backing"
 path = "fuzz_targets/open_backing.rs"
 test = false
 doc = false
+
+[[bin]]
+name = "iscsi_pdu"
+path = "fuzz_targets/iscsi_pdu.rs"
+test = false
+doc = false
