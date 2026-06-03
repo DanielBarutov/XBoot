@@ -819,3 +819,51 @@ mod tests {
         assert_eq!(rjb.len(), 48 + 48); // rejected header echoed as data
     }
 }
+
+#[cfg(test)]
+mod prop {
+    use super::*;
+    use crate::iscsi::{BHS_LEN, MAX_DATA_SEGMENT};
+    use proptest::prelude::*;
+
+    proptest! {
+        // decode never panics on arbitrary input.
+        #[test]
+        fn decode_never_panics(bytes in proptest::collection::vec(any::<u8>(), 0..4096)) {
+            let _ = decode(&bytes);
+        }
+
+        // When decode succeeds, `consumed` is within the buffer and 4-byte aligned.
+        #[test]
+        fn decode_consumed_is_consistent(bytes in proptest::collection::vec(any::<u8>(), 48..4096)) {
+            if let Ok((_, consumed)) = decode(&bytes) {
+                prop_assert!(consumed <= bytes.len());
+                prop_assert_eq!(consumed % 4, 0);
+                prop_assert!(consumed >= BHS_LEN);
+            }
+        }
+
+        // Every encoded response has a 4-aligned length, zero AHS, and a
+        // DataSegmentLength field matching the payload it carries.
+        #[test]
+        fn scsi_data_in_encode_invariants(
+            payload in proptest::collection::vec(any::<u8>(), 0..1024),
+            itt in any::<u32>(),
+            offset in any::<u32>(),
+        ) {
+            let n = payload.len();
+            let bytes = ScsiDataIn {
+                final_: true, ack: false, has_status: false, status: 0,
+                lun: 0, itt, ttt: 0xffff_ffff, stat_sn: 0, exp_cmd_sn: 0,
+                max_cmd_sn: 0, data_sn: 0, buffer_offset: offset, data: payload,
+            }.encode();
+
+            prop_assert_eq!(bytes.len() % 4, 0);
+            prop_assert!(bytes.len() <= BHS_LEN + n + 3);
+            prop_assert_eq!(bytes[4], 0); // TotalAHSLength
+            let dsl = ((bytes[5] as usize) << 16) | ((bytes[6] as usize) << 8) | bytes[7] as usize;
+            prop_assert_eq!(dsl, n);
+            prop_assert!(n <= MAX_DATA_SEGMENT);
+        }
+    }
+}
