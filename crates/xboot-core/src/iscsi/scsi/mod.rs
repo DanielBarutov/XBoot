@@ -325,4 +325,42 @@ mod tests {
         assert_eq!(out.data.len(), 0);
         assert_eq!(out.sense[12], sense::ASC_INVALID_FIELD_IN_CDB.0);
     }
+
+    #[test]
+    fn read_capacity_10_reports_last_lba_and_block_len() {
+        // 4096 bytes / 512 = 8 blocks -> last LBA = 7.
+        let t = target(vec![0u8; 4096]);
+        let mut cdb = [0u8; 16];
+        cdb[0] = op::READ_CAPACITY_10;
+        let out = t.execute(&cmd(lun_field(0), cdb), &[]);
+        assert_eq!(out.status, sense::GOOD);
+        assert_eq!(out.data.len(), 8);
+        assert_eq!(u32::from_be_bytes([out.data[0], out.data[1], out.data[2], out.data[3]]), 7);
+        assert_eq!(u32::from_be_bytes([out.data[4], out.data[5], out.data[6], out.data[7]]), 512);
+    }
+
+    #[test]
+    fn read_capacity_16_reports_8byte_last_lba() {
+        let t = target(vec![0u8; 4096]);
+        let mut cdb = [0u8; 16];
+        cdb[0] = op::SERVICE_ACTION_IN_16;
+        cdb[1] = 0x10; // READ CAPACITY (16) service action
+        let out = t.execute(&cmd(lun_field(0), cdb), &[]);
+        assert_eq!(out.status, sense::GOOD);
+        assert_eq!(out.data.len(), 32);
+        let last = u64::from_be_bytes(out.data[0..8].try_into().unwrap());
+        assert_eq!(last, 7);
+        assert_eq!(u32::from_be_bytes(out.data[8..12].try_into().unwrap()), 512);
+    }
+
+    #[test]
+    fn service_action_in_16_other_action_is_invalid_opcode() {
+        let t = target(vec![0u8; 4096]);
+        let mut cdb = [0u8; 16];
+        cdb[0] = op::SERVICE_ACTION_IN_16;
+        cdb[1] = 0x12; // not READ CAPACITY(16)
+        let out = t.execute(&cmd(lun_field(0), cdb), &[]);
+        assert_eq!(out.status, sense::CHECK_CONDITION);
+        assert_eq!(out.sense[12], sense::ASC_INVALID_OPCODE.0);
+    }
 }

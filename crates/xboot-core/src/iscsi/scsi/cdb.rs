@@ -66,8 +66,29 @@ pub(super) fn dispatch(lu: &LogicalUnit, cmd: &ScsiCommand, _write_data: &[u8]) 
     match cdb[0] {
         op::TEST_UNIT_READY => ScsiOutcome::ok(),
         op::INQUIRY => inquiry(lu, cdb),
+        op::READ_CAPACITY_10 => read_capacity_10(lu),
+        op::SERVICE_ACTION_IN_16 if cdb[1] & 0x1f == SAI_READ_CAPACITY_16 => read_capacity_16(lu),
         _ => ScsiOutcome::check(sense::ILLEGAL_REQUEST, sense::ASC_INVALID_OPCODE),
     }
+}
+
+fn read_capacity_10(lu: &LogicalUnit) -> ScsiOutcome {
+    let last = lu.total_blocks().saturating_sub(1);
+    // If the disk has more than 2^32 blocks, report 0xFFFFFFFF so the
+    // initiator falls back to READ CAPACITY(16).
+    let returned = if last > u32::MAX as u64 { u32::MAX } else { last as u32 };
+    let mut d = vec![0u8; 8];
+    d[0..4].copy_from_slice(&returned.to_be_bytes());
+    d[4..8].copy_from_slice(&lu.block_size.to_be_bytes());
+    ScsiOutcome::good(d)
+}
+
+fn read_capacity_16(lu: &LogicalUnit) -> ScsiOutcome {
+    let last = lu.total_blocks().saturating_sub(1);
+    let mut d = vec![0u8; 32];
+    d[0..8].copy_from_slice(&last.to_be_bytes());
+    d[8..12].copy_from_slice(&lu.block_size.to_be_bytes());
+    ScsiOutcome::good(d)
 }
 
 fn inquiry(lu: &LogicalUnit, cdb: &[u8; 16]) -> ScsiOutcome {
