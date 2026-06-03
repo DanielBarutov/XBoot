@@ -7,11 +7,21 @@ pub const BLOCK: u64 = 4096;
 
 /// Per-client store of overwritten blocks. Access is copy-based to avoid
 /// lock-lifetime borrow issues. Volatile: `reset` discards everything.
+///
+/// **Block-length contract.** A block is stored and read back at the exact
+/// length it was written. `Volume` always uses `block_len(blk)` for both, so a
+/// given `blk` is consistently `BLOCK` bytes — or shorter for the disk's tail
+/// block. Implementations may rely on this and need not pad; callers must pass a
+/// `buf` whose length matches the stored block. Violating this is a caller bug,
+/// not a recoverable runtime condition (the RAM impl panics rather than silently
+/// returning wrong-length data).
 pub trait OverlayStore: Send + Sync {
     /// If block `blk` exists, fill `buf` with its data and return true.
-    /// `buf.len()` must equal the stored block's length.
+    /// `buf.len()` must equal the stored block's length (see the trait's
+    /// block-length contract).
     fn read_block(&self, blk: u64, buf: &mut [u8]) -> bool;
-    /// Store/overwrite block `blk` with exactly `data`.
+    /// Store/overwrite block `blk` with exactly `data` (its length defines the
+    /// block's length for later `read_block` calls).
     fn write_block(&self, blk: u64, data: &[u8]);
     /// Discard all overlay contents (volatile "reboot").
     fn reset(&self);
