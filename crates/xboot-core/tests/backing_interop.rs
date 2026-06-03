@@ -55,7 +55,12 @@ fn qemu_dynamic_vhd_matches_source() {
     let (src, data) = make_source(dir.path(), 8 * 1024 * 1024);
     let out = dir.path().join("dyn.vhd");
     // subformat=dynamic, force_size keeps the virtual size exact.
-    convert(&src, &out, "vpc", &["-o", "subformat=dynamic,force_size=on"]);
+    convert(
+        &src,
+        &out,
+        "vpc",
+        &["-o", "subformat=dynamic,force_size=on"],
+    );
     assert_reads_match(&out, &data);
 }
 
