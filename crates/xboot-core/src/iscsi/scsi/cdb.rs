@@ -61,7 +61,7 @@ use crate::iscsi::ScsiCommand;
 
 /// Route a command to its handler. LUN is already resolved; REPORT LUNS is
 /// handled by the target before this is called.
-pub(super) fn dispatch(lu: &LogicalUnit, cmd: &ScsiCommand, _write_data: &[u8]) -> ScsiOutcome {
+pub(super) fn dispatch(lu: &LogicalUnit, cmd: &ScsiCommand, write_data: &[u8]) -> ScsiOutcome {
     let cdb = &cmd.cdb;
     match cdb[0] {
         op::TEST_UNIT_READY => ScsiOutcome::ok(),
@@ -70,7 +70,30 @@ pub(super) fn dispatch(lu: &LogicalUnit, cmd: &ScsiCommand, _write_data: &[u8]) 
         op::SERVICE_ACTION_IN_16 if cdb[1] & 0x1f == SAI_READ_CAPACITY_16 => read_capacity_16(lu),
         op::READ_10 => read(lu, lba32(cdb), len16(cdb)),
         op::READ_16 => read(lu, lba64(cdb), len32_16(cdb)),
+        op::WRITE_10 => write(lu, lba32(cdb), len16(cdb), write_data),
+        op::WRITE_16 => write(lu, lba64(cdb), len32_16(cdb), write_data),
         _ => ScsiOutcome::check(sense::ILLEGAL_REQUEST, sense::ASC_INVALID_OPCODE),
+    }
+}
+
+fn write(lu: &LogicalUnit, lba: u64, blocks: u64, write_data: &[u8]) -> ScsiOutcome {
+    if blocks == 0 {
+        return ScsiOutcome::ok();
+    }
+    let bs = lu.block_size as u64;
+    let in_range = lba
+        .checked_add(blocks)
+        .map(|end| end <= lu.total_blocks())
+        .unwrap_or(false);
+    if !in_range {
+        return ScsiOutcome::check(sense::ILLEGAL_REQUEST, sense::ASC_LBA_OUT_OF_RANGE);
+    }
+    if write_data.len() as u64 != blocks * bs {
+        return ScsiOutcome::check(sense::ILLEGAL_REQUEST, sense::ASC_INVALID_FIELD_IN_CDB);
+    }
+    match lu.volume.write_at(lba * bs, write_data) {
+        Ok(()) => ScsiOutcome::ok(),
+        Err(_) => ScsiOutcome::check(sense::MEDIUM_ERROR, sense::ASC_WRITE_ERROR),
     }
 }
 

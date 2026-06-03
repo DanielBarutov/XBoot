@@ -421,4 +421,62 @@ mod tests {
         assert_eq!(out.data.len(), 512);
         assert!(out.data.iter().all(|&x| x == 0xCD));
     }
+
+    #[test]
+    fn write10_then_read10_round_trips_through_overlay() {
+        let t = target(vec![0u8; 4096]);
+        let payload = vec![0x5Au8; 512];
+        let mut w = [0u8; 16];
+        w[0] = op::WRITE_10;
+        w[2..6].copy_from_slice(&2u32.to_be_bytes()); // LBA 2
+        w[7..9].copy_from_slice(&1u16.to_be_bytes()); // 1 block
+        let out = t.execute(&cmd(lun_field(0), w), &payload);
+        assert_eq!(out.status, sense::GOOD);
+
+        let mut r = [0u8; 16];
+        r[0] = op::READ_10;
+        r[2..6].copy_from_slice(&2u32.to_be_bytes());
+        r[7..9].copy_from_slice(&1u16.to_be_bytes());
+        let back = t.execute(&cmd(lun_field(0), r), &[]);
+        assert_eq!(back.data, payload);
+    }
+
+    #[test]
+    fn write10_wrong_buffer_len_is_invalid_field() {
+        let t = target(vec![0u8; 4096]);
+        let mut w = [0u8; 16];
+        w[0] = op::WRITE_10;
+        w[7..9].copy_from_slice(&1u16.to_be_bytes()); // expects 512 bytes
+        let out = t.execute(&cmd(lun_field(0), w), &[0u8; 100]); // wrong length
+        assert_eq!(out.status, sense::CHECK_CONDITION);
+        assert_eq!(out.sense[12], sense::ASC_INVALID_FIELD_IN_CDB.0);
+    }
+
+    #[test]
+    fn write10_past_end_is_lba_out_of_range() {
+        let t = target(vec![0u8; 4096]); // 8 blocks
+        let mut w = [0u8; 16];
+        w[0] = op::WRITE_10;
+        w[2..6].copy_from_slice(&8u32.to_be_bytes()); // LBA 8 == total -> out of range
+        w[7..9].copy_from_slice(&1u16.to_be_bytes());
+        let out = t.execute(&cmd(lun_field(0), w), &[0u8; 512]);
+        assert_eq!(out.status, sense::CHECK_CONDITION);
+        assert_eq!(out.sense[12], sense::ASC_LBA_OUT_OF_RANGE.0);
+    }
+
+    #[test]
+    fn write16_round_trips() {
+        let t = target(vec![0u8; 4096]);
+        let payload = vec![0x33u8; 512];
+        let mut w = [0u8; 16];
+        w[0] = op::WRITE_16;
+        // LBA 0, 1 block at 10..14
+        w[10..14].copy_from_slice(&1u32.to_be_bytes());
+        assert_eq!(t.execute(&cmd(lun_field(0), w), &payload).status, sense::GOOD);
+
+        let mut r = [0u8; 16];
+        r[0] = op::READ_16;
+        r[10..14].copy_from_slice(&1u32.to_be_bytes());
+        assert_eq!(t.execute(&cmd(lun_field(0), r), &[]).data, payload);
+    }
 }
