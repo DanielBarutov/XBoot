@@ -326,6 +326,32 @@ mod tests {
         a.read_at(0, &mut buf).unwrap();
         assert_eq!(buf, [0x99; 8]);
     }
+
+    #[test]
+    fn concurrent_writers_isolated_by_block() {
+        use std::thread;
+
+        // Each thread owns one full block and writes its id into it.
+        let v: Arc<Volume> = Arc::new(vol(ramp(8 * BLOCK as usize)));
+        let mut handles = Vec::new();
+        for t in 0u8..8 {
+            let v = v.clone();
+            handles.push(thread::spawn(move || {
+                let data = vec![t; BLOCK as usize];
+                v.write_at(t as u64 * BLOCK, &data).unwrap();
+            }));
+        }
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        // Every block must contain exactly its writer's id.
+        for t in 0u8..8 {
+            let mut buf = vec![0u8; BLOCK as usize];
+            v.read_at(t as u64 * BLOCK, &mut buf).unwrap();
+            assert!(buf.iter().all(|&b| b == t), "block {t} corrupted");
+        }
+    }
 }
 
 #[cfg(test)]
