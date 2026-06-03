@@ -6,7 +6,7 @@ use std::path::Path;
 
 mod dynamic;
 mod fixed;
-mod footer;
+pub mod footer;
 
 pub use dynamic::DynamicVhd;
 pub use fixed::FixedVhd;

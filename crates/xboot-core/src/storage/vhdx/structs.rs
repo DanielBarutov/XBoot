@@ -60,14 +60,14 @@ pub(crate) fn parse_best_header(h1: &[u8], h2: &[u8]) -> io::Result<VhdxHeader> 
 }
 
 /// Located regions: each is `(file_offset, length)`.
-pub(crate) struct Regions {
+pub struct Regions {
     pub bat: Option<(u64, u64)>,
     pub metadata: Option<(u64, u64)>,
 }
 
 /// Parse a 64 KiB region table, validating its CRC, and pick out the BAT and
 /// metadata regions by GUID.
-pub(crate) fn parse_region_table(rt: &[u8]) -> io::Result<Regions> {
+pub fn parse_region_table(rt: &[u8]) -> io::Result<Regions> {
     if rt.len() < 64 * 1024 || &rt[0..4] != b"regi" {
         return Err(invalid_data("VHDX region table signature mismatch"));
     }

@@ -4,8 +4,8 @@ use std::path::Path;
 mod blockmap;
 mod file_ext;
 mod raw;
-mod vhd;
-mod vhdx;
+pub mod vhd;
+pub mod vhdx;
 
 pub use raw::RawFile;
 pub use vhd::Vhd;
@@ -124,5 +124,41 @@ mod factory_tests {
         let p = write_tmp("a.vhdx", &vhdx_fix::dynamic_vhdx(&[4u8; 1024 * 1024]));
         let store = open_backing(&p).unwrap();
         assert_eq!(store.size_bytes(), 1024 * 1024);
+    }
+}
+
+#[cfg(test)]
+mod fuzz_smoke {
+    use super::*;
+
+    // Deterministic xorshift so failures reproduce from the printed seed.
+    fn fill(seed: u64, buf: &mut [u8]) {
+        let mut x = seed | 1;
+        for b in buf.iter_mut() {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            *b = (x & 0xFF) as u8;
+        }
+    }
+
+    #[test]
+    fn open_backing_never_panics_on_garbage() {
+        for seed in 0..512u64 {
+            let mut bytes = vec![0u8; 4096];
+            fill(seed, &mut bytes);
+            // Plant magic bytes some of the time to drive the parsers deeper.
+            match seed % 3 {
+                0 => bytes[0..8].copy_from_slice(b"vhdxfile"),
+                1 => bytes[4096 - 512..4096 - 512 + 8].copy_from_slice(b"conectix"),
+                _ => {}
+            }
+            let dir = std::env::temp_dir().join(format!("xboot-fuzz-{}", std::process::id()));
+            std::fs::create_dir_all(&dir).unwrap();
+            let p = dir.join(format!("g{seed}.img"));
+            std::fs::write(&p, &bytes).unwrap();
+            // Must return Ok or Err, never panic.
+            let _ = open_backing(&p);
+        }
     }
 }

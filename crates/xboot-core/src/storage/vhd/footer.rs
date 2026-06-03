@@ -7,7 +7,7 @@ pub(crate) const DISK_TYPE_FIXED: u32 = 2;
 pub(crate) const DISK_TYPE_DYNAMIC: u32 = 3;
 
 /// The parsed fields of a 512-byte VHD footer that we use.
-pub(crate) struct VhdFooter {
+pub struct VhdFooter {
     pub data_offset: u64,
     pub current_size: u64,
     pub disk_type: u32,
@@ -22,7 +22,7 @@ fn be_u64(b: &[u8]) -> u64 {
 
 impl VhdFooter {
     /// Parse and validate a footer from at least 512 bytes.
-    pub(crate) fn parse(bytes: &[u8]) -> io::Result<Self> {
+    pub fn parse(bytes: &[u8]) -> io::Result<Self> {
         if bytes.len() < 512 {
             return Err(invalid_data("VHD footer shorter than 512 bytes"));
         }

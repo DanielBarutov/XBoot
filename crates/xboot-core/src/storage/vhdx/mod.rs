@@ -6,7 +6,7 @@ use std::path::Path;
 
 mod crc32c;
 mod metadata;
-mod structs;
+pub mod structs;
 
 use crate::storage::blockmap::{read_units, Unit};
 use crate::storage::file_ext::read_exact_at;
