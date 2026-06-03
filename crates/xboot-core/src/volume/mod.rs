@@ -107,11 +107,11 @@ impl Volume {
 }
 
 #[cfg(test)]
-mod tests {
+mod tests_support {
     use super::*;
 
     /// In-memory backing store for tests: the bytes ARE the disk.
-    struct Mem(Vec<u8>);
+    pub struct Mem(pub Vec<u8>);
 
     impl BackingStore for Mem {
         fn size_bytes(&self) -> u64 {
@@ -123,6 +123,12 @@ mod tests {
             Ok(())
         }
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::tests_support::Mem;
+    use super::*;
 
     fn vol(master_bytes: Vec<u8>) -> Volume {
         Volume::new(Box::new(Mem(master_bytes)), Box::new(RamOverlay::new()))
@@ -319,5 +325,66 @@ mod tests {
         // a does see its own write.
         a.read_at(0, &mut buf).unwrap();
         assert_eq!(buf, [0x99; 8]);
+    }
+}
+
+#[cfg(test)]
+mod prop {
+    use super::tests_support::Mem;
+    use super::*;
+    use proptest::collection as pcoll;
+    use proptest::prelude::*;
+
+    /// One operation against both the Volume and the reference byte array.
+    #[derive(Debug, Clone)]
+    enum Op {
+        Read { offset: usize, len: usize },
+        Write { offset: usize, bytes: Vec<u8> },
+    }
+
+    const SIZE: usize = 3 * BLOCK as usize + 123; // a few blocks + a short tail
+
+    fn op_strategy() -> impl Strategy<Value = Op> {
+        prop_oneof![
+            (0..SIZE, 0..(2 * BLOCK as usize)).prop_map(|(offset, len)| {
+                let len = len.min(SIZE - offset);
+                Op::Read { offset, len }
+            }),
+            (0..SIZE, pcoll::vec(any::<u8>(), 0..(2 * BLOCK as usize))).prop_map(
+                |(offset, mut bytes)| {
+                    bytes.truncate(SIZE - offset);
+                    Op::Write { offset, bytes }
+                }
+            ),
+        ]
+    }
+
+    proptest! {
+        #[test]
+        fn volume_matches_flat_model(ops in pcoll::vec(op_strategy(), 0..200)) {
+            // Master is a fixed ramp; model starts equal to it.
+            let master: Vec<u8> = (0..SIZE).map(|i| (i % 256) as u8).collect();
+            let mut model = master.clone();
+            let v = Volume::new(Box::new(Mem(master)), Box::new(RamOverlay::new()));
+
+            for op in ops {
+                match op {
+                    Op::Read { offset, len } => {
+                        let mut got = vec![0u8; len];
+                        v.read_at(offset as u64, &mut got).unwrap();
+                        prop_assert_eq!(&got, &model[offset..offset + len]);
+                    }
+                    Op::Write { offset, bytes } => {
+                        v.write_at(offset as u64, &bytes).unwrap();
+                        model[offset..offset + bytes.len()].copy_from_slice(&bytes);
+                    }
+                }
+            }
+
+            // Final full read must equal the model.
+            let mut full = vec![0u8; SIZE];
+            v.read_at(0, &mut full).unwrap();
+            prop_assert_eq!(full, model);
+        }
     }
 }
