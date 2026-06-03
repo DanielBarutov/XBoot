@@ -236,6 +236,284 @@ pub fn decode(buf: &[u8]) -> Result<(Request, usize), PduError> {
     Ok((req, total))
 }
 
+// ---- big-endian writers into a mutable BHS ----
+
+fn put16(b: &mut [u8], off: usize, v: u16) {
+    b[off..off + 2].copy_from_slice(&v.to_be_bytes());
+}
+fn put24(b: &mut [u8], off: usize, v: usize) {
+    b[off] = (v >> 16) as u8;
+    b[off + 1] = (v >> 8) as u8;
+    b[off + 2] = v as u8;
+}
+fn put32(b: &mut [u8], off: usize, v: u32) {
+    b[off..off + 4].copy_from_slice(&v.to_be_bytes());
+}
+fn put64(b: &mut [u8], off: usize, v: u64) {
+    b[off..off + 8].copy_from_slice(&v.to_be_bytes());
+}
+
+/// Assemble a PDU from a fully-populated 48-byte BHS plus a data segment.
+/// Writes DataSegmentLength into bytes 5..8 and pads the data to 4 bytes.
+fn frame(mut bhs: [u8; BHS_LEN], data: &[u8]) -> Vec<u8> {
+    put24(&mut bhs, 5, data.len());
+    let mut out = Vec::with_capacity(BHS_LEN + data.len() + pad4(data.len()));
+    out.extend_from_slice(&bhs);
+    out.extend_from_slice(data);
+    out.resize(out.len() + pad4(data.len()), 0);
+    out
+}
+
+// ---- response types (target -> initiator) ----
+
+#[derive(Debug, Clone)]
+pub struct LoginResponse {
+    pub transit: bool,
+    pub continue_: bool,
+    pub csg: u8,
+    pub nsg: u8,
+    pub version_max: u8,
+    pub version_active: u8,
+    pub isid: [u8; 6],
+    pub tsih: u16,
+    pub itt: u32,
+    pub stat_sn: u32,
+    pub exp_cmd_sn: u32,
+    pub max_cmd_sn: u32,
+    pub status_class: u8,
+    pub status_detail: u8,
+    pub text: Vec<(String, String)>,
+}
+
+impl LoginResponse {
+    pub fn encode(&self) -> Vec<u8> {
+        let mut h = [0u8; BHS_LEN];
+        h[0] = opcode::LOGIN_RESP;
+        if self.transit {
+            h[1] |= 0x80;
+        }
+        if self.continue_ {
+            h[1] |= 0x40;
+        }
+        h[1] |= (self.csg & 0x3) << 2;
+        h[1] |= self.nsg & 0x3;
+        h[2] = self.version_max;
+        h[3] = self.version_active;
+        h[8..14].copy_from_slice(&self.isid);
+        put16(&mut h, 14, self.tsih);
+        put32(&mut h, 16, self.itt);
+        put32(&mut h, 24, self.stat_sn);
+        put32(&mut h, 28, self.exp_cmd_sn);
+        put32(&mut h, 32, self.max_cmd_sn);
+        h[36] = self.status_class;
+        h[37] = self.status_detail;
+        frame(h, &text::encode_pairs(&self.text))
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct TextResponse {
+    pub final_: bool,
+    pub continue_: bool,
+    pub itt: u32,
+    pub ttt: u32,
+    pub stat_sn: u32,
+    pub exp_cmd_sn: u32,
+    pub max_cmd_sn: u32,
+    pub text: Vec<(String, String)>,
+}
+
+impl TextResponse {
+    pub fn encode(&self) -> Vec<u8> {
+        let mut h = [0u8; BHS_LEN];
+        h[0] = opcode::TEXT_RESP;
+        if self.final_ {
+            h[1] |= 0x80;
+        }
+        if self.continue_ {
+            h[1] |= 0x40;
+        }
+        put32(&mut h, 16, self.itt);
+        put32(&mut h, 20, self.ttt);
+        put32(&mut h, 24, self.stat_sn);
+        put32(&mut h, 28, self.exp_cmd_sn);
+        put32(&mut h, 32, self.max_cmd_sn);
+        frame(h, &text::encode_pairs(&self.text))
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ScsiResponse {
+    pub response: u8,
+    pub status: u8,
+    pub itt: u32,
+    pub stat_sn: u32,
+    pub exp_cmd_sn: u32,
+    pub max_cmd_sn: u32,
+    pub residual: u32,
+    pub sense: Vec<u8>,
+}
+
+impl ScsiResponse {
+    pub fn encode(&self) -> Vec<u8> {
+        let mut h = [0u8; BHS_LEN];
+        h[0] = opcode::SCSI_RESP;
+        h[1] = 0x80; // F is always set on a SCSI Response
+        h[2] = self.response;
+        h[3] = self.status;
+        put32(&mut h, 16, self.itt);
+        put32(&mut h, 24, self.stat_sn);
+        put32(&mut h, 28, self.exp_cmd_sn);
+        put32(&mut h, 32, self.max_cmd_sn);
+        put32(&mut h, 44, self.residual);
+        frame(h, &self.sense)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ScsiDataIn {
+    pub final_: bool,
+    pub ack: bool,
+    pub has_status: bool,
+    pub status: u8,
+    pub lun: u64,
+    pub itt: u32,
+    pub ttt: u32,
+    pub stat_sn: u32,
+    pub exp_cmd_sn: u32,
+    pub max_cmd_sn: u32,
+    pub data_sn: u32,
+    pub buffer_offset: u32,
+    pub data: Vec<u8>,
+}
+
+impl ScsiDataIn {
+    pub fn encode(&self) -> Vec<u8> {
+        let mut h = [0u8; BHS_LEN];
+        h[0] = opcode::DATA_IN;
+        if self.final_ {
+            h[1] |= 0x80;
+        }
+        if self.ack {
+            h[1] |= 0x40;
+        }
+        if self.has_status {
+            h[1] |= 0x01; // S bit; status valid only with F set
+        }
+        h[3] = self.status;
+        put64(&mut h, 8, self.lun);
+        put32(&mut h, 16, self.itt);
+        put32(&mut h, 20, self.ttt);
+        put32(&mut h, 24, self.stat_sn);
+        put32(&mut h, 28, self.exp_cmd_sn);
+        put32(&mut h, 32, self.max_cmd_sn);
+        put32(&mut h, 36, self.data_sn);
+        put32(&mut h, 40, self.buffer_offset);
+        frame(h, &self.data)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct R2t {
+    pub lun: u64,
+    pub itt: u32,
+    pub ttt: u32,
+    pub stat_sn: u32,
+    pub exp_cmd_sn: u32,
+    pub max_cmd_sn: u32,
+    pub r2t_sn: u32,
+    pub buffer_offset: u32,
+    pub desired_length: u32,
+}
+
+impl R2t {
+    pub fn encode(&self) -> Vec<u8> {
+        let mut h = [0u8; BHS_LEN];
+        h[0] = opcode::R2T;
+        h[1] = 0x80; // F always set
+        put64(&mut h, 8, self.lun);
+        put32(&mut h, 16, self.itt);
+        put32(&mut h, 20, self.ttt);
+        put32(&mut h, 24, self.stat_sn);
+        put32(&mut h, 28, self.exp_cmd_sn);
+        put32(&mut h, 32, self.max_cmd_sn);
+        put32(&mut h, 36, self.r2t_sn);
+        put32(&mut h, 40, self.buffer_offset);
+        put32(&mut h, 44, self.desired_length);
+        frame(h, &[])
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct NopIn {
+    pub lun: u64,
+    pub itt: u32,
+    pub ttt: u32,
+    pub stat_sn: u32,
+    pub exp_cmd_sn: u32,
+    pub max_cmd_sn: u32,
+    pub data: Vec<u8>,
+}
+
+impl NopIn {
+    pub fn encode(&self) -> Vec<u8> {
+        let mut h = [0u8; BHS_LEN];
+        h[0] = opcode::NOP_IN;
+        h[1] = 0x80; // F always set
+        put64(&mut h, 8, self.lun);
+        put32(&mut h, 16, self.itt);
+        put32(&mut h, 20, self.ttt);
+        put32(&mut h, 24, self.stat_sn);
+        put32(&mut h, 28, self.exp_cmd_sn);
+        put32(&mut h, 32, self.max_cmd_sn);
+        frame(h, &self.data)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct LogoutResponse {
+    pub response: u8,
+    pub stat_sn: u32,
+    pub exp_cmd_sn: u32,
+    pub max_cmd_sn: u32,
+}
+
+impl LogoutResponse {
+    pub fn encode(&self) -> Vec<u8> {
+        let mut h = [0u8; BHS_LEN];
+        h[0] = opcode::LOGOUT_RESP;
+        h[1] = 0x80; // F always set
+        h[2] = self.response;
+        put32(&mut h, 24, self.stat_sn);
+        put32(&mut h, 28, self.exp_cmd_sn);
+        put32(&mut h, 32, self.max_cmd_sn);
+        frame(h, &[])
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Reject {
+    pub reason: u8,
+    pub stat_sn: u32,
+    pub exp_cmd_sn: u32,
+    pub max_cmd_sn: u32,
+    /// The 48-byte BHS of the rejected PDU, echoed back as the data segment.
+    pub header: Vec<u8>,
+}
+
+impl Reject {
+    pub fn encode(&self) -> Vec<u8> {
+        let mut h = [0u8; BHS_LEN];
+        h[0] = opcode::REJECT;
+        h[1] = 0x80; // F always set
+        h[2] = self.reason;
+        put32(&mut h, 24, self.stat_sn);
+        put32(&mut h, 28, self.exp_cmd_sn);
+        put32(&mut h, 32, self.max_cmd_sn);
+        frame(h, &self.header)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -388,5 +666,156 @@ mod tests {
         assert_eq!(l.reason, 1);
         assert_eq!(l.itt, 7);
         assert_eq!(l.cid, 3);
+    }
+
+    #[test]
+    fn login_response_encodes_header_and_text() {
+        let resp = LoginResponse {
+            transit: true,
+            continue_: false,
+            csg: 1,
+            nsg: 3,
+            version_max: 0,
+            version_active: 0,
+            isid: [1, 2, 3, 4, 5, 6],
+            tsih: 0x1234,
+            itt: 0x42,
+            stat_sn: 1,
+            exp_cmd_sn: 6,
+            max_cmd_sn: 10,
+            status_class: 0,
+            status_detail: 0,
+            text: vec![("HeaderDigest".into(), "None".into())],
+        };
+        let bytes = resp.encode();
+        assert_eq!(bytes[0] & 0x3f, opcode::LOGIN_RESP);
+        assert_eq!(bytes[1] & 0x80, 0x80); // transit
+        assert_eq!(bytes[4], 0); // TotalAHSLength
+        let text = b"HeaderDigest=None\0"; // len 18 -> pad to 20
+        let dsl = ((bytes[5] as usize) << 16) | ((bytes[6] as usize) << 8) | bytes[7] as usize;
+        assert_eq!(dsl, text.len());
+        assert_eq!(&bytes[48..48 + text.len()], text);
+        assert_eq!(bytes.len(), 48 + 20); // padded to 4-byte boundary
+        assert_eq!(bytes[14..16], 0x1234u16.to_be_bytes()); // TSIH
+        assert_eq!(bytes[16..20], 0x42u32.to_be_bytes()); // ITT
+    }
+
+    #[test]
+    fn scsi_response_good_status_no_data() {
+        let resp = ScsiResponse {
+            response: 0x00,
+            status: 0x00, // GOOD
+            itt: 0x42,
+            stat_sn: 5,
+            exp_cmd_sn: 6,
+            max_cmd_sn: 10,
+            residual: 0,
+            sense: Vec::new(),
+        };
+        let bytes = resp.encode();
+        assert_eq!(bytes[0] & 0x3f, opcode::SCSI_RESP);
+        assert_eq!(bytes[1] & 0x80, 0x80); // F always set on SCSI Response
+        assert_eq!(bytes[2], 0x00); // response
+        assert_eq!(bytes[3], 0x00); // status GOOD
+        assert_eq!(bytes[16..20], 0x42u32.to_be_bytes());
+        assert_eq!(bytes.len(), 48); // no data
+    }
+
+    #[test]
+    fn scsi_data_in_carries_payload_and_offset() {
+        let resp = ScsiDataIn {
+            final_: true,
+            ack: false,
+            has_status: true,
+            status: 0x00,
+            lun: 1,
+            itt: 0x42,
+            ttt: 0xffff_ffff,
+            stat_sn: 5,
+            exp_cmd_sn: 6,
+            max_cmd_sn: 10,
+            data_sn: 0,
+            buffer_offset: 512,
+            data: vec![0xAA, 0xBB, 0xCC, 0xDD],
+        };
+        let bytes = resp.encode();
+        assert_eq!(bytes[0] & 0x3f, opcode::DATA_IN);
+        assert_eq!(bytes[1] & 0x80, 0x80); // F
+        assert_eq!(bytes[1] & 0x01, 0x01); // S (status present)
+        assert_eq!(bytes[40..44], 512u32.to_be_bytes()); // BufferOffset
+        assert_eq!(&bytes[48..52], &[0xAA, 0xBB, 0xCC, 0xDD]);
+        assert_eq!(bytes.len(), 52);
+    }
+
+    #[test]
+    fn r2t_encodes_transfer_request() {
+        let r2t = R2t {
+            lun: 1,
+            itt: 0x42,
+            ttt: 0x77,
+            stat_sn: 5,
+            exp_cmd_sn: 6,
+            max_cmd_sn: 10,
+            r2t_sn: 0,
+            buffer_offset: 0,
+            desired_length: 4096,
+        };
+        let bytes = r2t.encode();
+        assert_eq!(bytes[0] & 0x3f, opcode::R2T);
+        assert_eq!(bytes[20..24], 0x77u32.to_be_bytes()); // TTT
+        assert_eq!(bytes[44..48], 4096u32.to_be_bytes()); // DesiredDataTransferLength
+        assert_eq!(bytes.len(), 48);
+    }
+
+    #[test]
+    fn nop_in_and_logout_and_text_and_reject_encode_opcodes() {
+        let nop = NopIn {
+            lun: 0,
+            itt: 0xffff_ffff,
+            ttt: 0xffff_ffff,
+            stat_sn: 1,
+            exp_cmd_sn: 2,
+            max_cmd_sn: 3,
+            data: vec![1, 2, 3],
+        };
+        assert_eq!(nop.encode()[0] & 0x3f, opcode::NOP_IN);
+        assert_eq!(nop.encode().len(), 48 + 4); // 3 bytes + 1 pad
+
+        let lo = LogoutResponse {
+            response: 0,
+            stat_sn: 1,
+            exp_cmd_sn: 2,
+            max_cmd_sn: 3,
+        };
+        let lob = lo.encode();
+        assert_eq!(lob[0] & 0x3f, opcode::LOGOUT_RESP);
+        assert_eq!(lob[2], 0); // response
+        assert_eq!(lob.len(), 48);
+
+        let tr = TextResponse {
+            final_: true,
+            continue_: false,
+            itt: 0x42,
+            ttt: 0xffff_ffff,
+            stat_sn: 1,
+            exp_cmd_sn: 2,
+            max_cmd_sn: 3,
+            text: vec![("TargetName".into(), "iqn.x".into())],
+        };
+        let trb = tr.encode();
+        assert_eq!(trb[0] & 0x3f, opcode::TEXT_RESP);
+        assert_eq!(trb[1] & 0x80, 0x80); // F
+
+        let rj = Reject {
+            reason: 0x05,
+            stat_sn: 1,
+            exp_cmd_sn: 2,
+            max_cmd_sn: 3,
+            header: vec![0u8; 48],
+        };
+        let rjb = rj.encode();
+        assert_eq!(rjb[0] & 0x3f, opcode::REJECT);
+        assert_eq!(rjb[2], 0x05); // reason
+        assert_eq!(rjb.len(), 48 + 48); // rejected header echoed as data
     }
 }

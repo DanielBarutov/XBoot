@@ -58,7 +58,10 @@ mod tests {
     fn value_may_contain_equals_sign() {
         // Only the first '=' separates key from value.
         let pairs = parse_pairs(b"TargetAddress=10.0.0.1:3260,1\0");
-        assert_eq!(pairs, vec![("TargetAddress".into(), "10.0.0.1:3260,1".into())]);
+        assert_eq!(
+            pairs,
+            vec![("TargetAddress".into(), "10.0.0.1:3260,1".into())]
+        );
     }
 
     #[test]
