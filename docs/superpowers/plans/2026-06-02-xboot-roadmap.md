@@ -134,6 +134,12 @@ property-инвариант COW зелёный.
 
 **Цель:** реальный iSCSI-инициатор может подключиться и работать с томом клиента.
 
+> **Нарезка (с 2026-06-03):** из-за размера фаза разбита на три под-фазы, каждая со своей
+> спекой/планом: **05a** PDU-кодек (`specs/2026-06-03-phase05a-iscsi-pdu-design.md`),
+> **05b** SCSI-команды, **05c** сессия/транспорт (sans-I/O + tokio) + фейковый инициатор.
+> Решения на всю фазу: sans-I/O ядро + тонкий async-адаптер; модуль `iscsi/` в `xboot-core`;
+> стандартный подмножество RFC 7143; AuthMethod=None.
+
 **Объём:**
 - iSCSI login (security/operational negotiation — минимально необходимое для iPXE и Windows).
 - Набор SCSI-команд: `INQUIRY`, `REPORT LUNS`, `READ CAPACITY (10/16)`, `TEST UNIT READY`,
