@@ -68,7 +68,28 @@ pub(super) fn dispatch(lu: &LogicalUnit, cmd: &ScsiCommand, _write_data: &[u8]) 
         op::INQUIRY => inquiry(lu, cdb),
         op::READ_CAPACITY_10 => read_capacity_10(lu),
         op::SERVICE_ACTION_IN_16 if cdb[1] & 0x1f == SAI_READ_CAPACITY_16 => read_capacity_16(lu),
+        op::READ_10 => read(lu, lba32(cdb), len16(cdb)),
+        op::READ_16 => read(lu, lba64(cdb), len32_16(cdb)),
         _ => ScsiOutcome::check(sense::ILLEGAL_REQUEST, sense::ASC_INVALID_OPCODE),
+    }
+}
+
+fn read(lu: &LogicalUnit, lba: u64, blocks: u64) -> ScsiOutcome {
+    if blocks == 0 {
+        return ScsiOutcome::ok();
+    }
+    let bs = lu.block_size as u64;
+    let in_range = lba
+        .checked_add(blocks)
+        .map(|end| end <= lu.total_blocks())
+        .unwrap_or(false);
+    if !in_range {
+        return ScsiOutcome::check(sense::ILLEGAL_REQUEST, sense::ASC_LBA_OUT_OF_RANGE);
+    }
+    let mut data = vec![0u8; (blocks * bs) as usize];
+    match lu.volume.read_at(lba * bs, &mut data) {
+        Ok(()) => ScsiOutcome::good(data),
+        Err(_) => ScsiOutcome::check(sense::MEDIUM_ERROR, sense::ASC_UNRECOVERED_READ_ERROR),
     }
 }
 

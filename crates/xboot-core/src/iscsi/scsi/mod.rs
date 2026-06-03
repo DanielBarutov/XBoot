@@ -363,4 +363,62 @@ mod tests {
         assert_eq!(out.status, sense::CHECK_CONDITION);
         assert_eq!(out.sense[12], sense::ASC_INVALID_OPCODE.0);
     }
+
+    #[test]
+    fn read10_returns_master_bytes() {
+        // Master: 8 blocks of 512; fill block 1 (bytes 512..1024) with 0xAB.
+        let mut master = vec![0u8; 4096];
+        for b in &mut master[512..1024] {
+            *b = 0xAB;
+        }
+        let t = target(master);
+        let mut cdb = [0u8; 16];
+        cdb[0] = op::READ_10;
+        cdb[2..6].copy_from_slice(&1u32.to_be_bytes()); // LBA 1
+        cdb[7..9].copy_from_slice(&1u16.to_be_bytes()); // 1 block
+        let out = t.execute(&cmd(lun_field(0), cdb), &[]);
+        assert_eq!(out.status, sense::GOOD);
+        assert_eq!(out.data.len(), 512);
+        assert!(out.data.iter().all(|&x| x == 0xAB));
+    }
+
+    #[test]
+    fn read10_zero_length_is_good_no_data() {
+        let t = target(vec![0u8; 4096]);
+        let mut cdb = [0u8; 16];
+        cdb[0] = op::READ_10;
+        // transfer length 0
+        let out = t.execute(&cmd(lun_field(0), cdb), &[]);
+        assert_eq!(out.status, sense::GOOD);
+        assert!(out.data.is_empty());
+    }
+
+    #[test]
+    fn read10_past_end_is_lba_out_of_range() {
+        let t = target(vec![0u8; 4096]); // 8 blocks
+        let mut cdb = [0u8; 16];
+        cdb[0] = op::READ_10;
+        cdb[2..6].copy_from_slice(&7u32.to_be_bytes()); // LBA 7
+        cdb[7..9].copy_from_slice(&2u16.to_be_bytes()); // 2 blocks -> ends at 9 > 8
+        let out = t.execute(&cmd(lun_field(0), cdb), &[]);
+        assert_eq!(out.status, sense::CHECK_CONDITION);
+        assert_eq!(out.sense[12], sense::ASC_LBA_OUT_OF_RANGE.0);
+    }
+
+    #[test]
+    fn read16_returns_master_bytes() {
+        let mut master = vec![0u8; 4096];
+        for b in &mut master[0..512] {
+            *b = 0xCD;
+        }
+        let t = target(master);
+        let mut cdb = [0u8; 16];
+        cdb[0] = op::READ_16;
+        // LBA 0 (bytes 2..10 already zero), 1 block at 10..14
+        cdb[10..14].copy_from_slice(&1u32.to_be_bytes());
+        let out = t.execute(&cmd(lun_field(0), cdb), &[]);
+        assert_eq!(out.status, sense::GOOD);
+        assert_eq!(out.data.len(), 512);
+        assert!(out.data.iter().all(|&x| x == 0xCD));
+    }
 }
