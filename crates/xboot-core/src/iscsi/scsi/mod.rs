@@ -528,4 +528,24 @@ mod tests {
         assert_eq!(out.data[4], 0x08); // page code
         assert_eq!(out.data[6] & 0x04, 0x04); // WCE
     }
+
+    #[test]
+    fn report_luns_lists_configured_luns() {
+        // LUN 0 and LUN 2 present, LUN 1 absent.
+        let t = ScsiTarget::new(vec![
+            Some(lu(vec![0u8; 4096])),
+            None,
+            Some(lu(vec![0u8; 4096])),
+        ]);
+        let mut cdb = [0u8; 16];
+        cdb[0] = op::REPORT_LUNS;
+        let out = t.execute(&cmd(lun_field(0), cdb), &[]);
+        assert_eq!(out.status, sense::GOOD);
+        // header(8) + 2 LUNs * 8 = 24 bytes.
+        assert_eq!(out.data.len(), 24);
+        let list_len = u32::from_be_bytes(out.data[0..4].try_into().unwrap());
+        assert_eq!(list_len, 16); // 2 LUNs * 8 bytes
+        assert_eq!(out.data[9], 0); // first LUN number == 0 (byte 1 of the 8-byte LUN)
+        assert_eq!(out.data[17], 2); // second LUN number == 2
+    }
 }
