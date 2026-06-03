@@ -55,6 +55,21 @@ fn len32_16(cdb: &[u8; 16]) -> u64 {
     be32(cdb, 10) as u64
 }
 
+use super::sense;
+use super::{LogicalUnit, ScsiOutcome};
+use crate::iscsi::ScsiCommand;
+
+/// Route a command to its handler. LUN is already resolved; REPORT LUNS is
+/// handled by the target before this is called.
+#[allow(unused_variables)] // `lu` and `cdb` used by later 05b tasks
+pub(super) fn dispatch(lu: &LogicalUnit, cmd: &ScsiCommand, _write_data: &[u8]) -> ScsiOutcome {
+    let cdb = &cmd.cdb;
+    match cdb[0] {
+        op::TEST_UNIT_READY => ScsiOutcome::ok(),
+        _ => ScsiOutcome::check(sense::ILLEGAL_REQUEST, sense::ASC_INVALID_OPCODE),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
