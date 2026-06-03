@@ -61,13 +61,37 @@ use crate::iscsi::ScsiCommand;
 
 /// Route a command to its handler. LUN is already resolved; REPORT LUNS is
 /// handled by the target before this is called.
-#[allow(unused_variables)] // `lu` and `cdb` used by later 05b tasks
 pub(super) fn dispatch(lu: &LogicalUnit, cmd: &ScsiCommand, _write_data: &[u8]) -> ScsiOutcome {
     let cdb = &cmd.cdb;
     match cdb[0] {
         op::TEST_UNIT_READY => ScsiOutcome::ok(),
+        op::INQUIRY => inquiry(lu, cdb),
         _ => ScsiOutcome::check(sense::ILLEGAL_REQUEST, sense::ASC_INVALID_OPCODE),
     }
+}
+
+fn inquiry(lu: &LogicalUnit, cdb: &[u8; 16]) -> ScsiOutcome {
+    let evpd = cdb[1] & 0x01 != 0;
+    let page = cdb[2];
+    if !evpd {
+        // Standard INQUIRY: page code must be 0 when EVPD is clear.
+        if page != 0 {
+            return ScsiOutcome::check(sense::ILLEGAL_REQUEST, sense::ASC_INVALID_FIELD_IN_CDB);
+        }
+        return ScsiOutcome::good(lu.standard_inquiry());
+    }
+    match page {
+        0x00 => ScsiOutcome::good(vpd_supported_pages()),
+        0x80 => ScsiOutcome::good(lu.vpd_unit_serial()),
+        0x83 => ScsiOutcome::good(lu.vpd_device_id()),
+        _ => ScsiOutcome::check(sense::ILLEGAL_REQUEST, sense::ASC_INVALID_FIELD_IN_CDB),
+    }
+}
+
+/// VPD page 0x00: list of supported VPD pages.
+fn vpd_supported_pages() -> Vec<u8> {
+    // header(4) + page list; byte3 = number of pages.
+    vec![0x00, 0x00, 0x00, 0x03, 0x00, 0x80, 0x83]
 }
 
 #[cfg(test)]

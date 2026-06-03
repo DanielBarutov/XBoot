@@ -74,6 +74,51 @@ impl LogicalUnit {
     pub(crate) fn total_blocks(&self) -> u64 {
         self.volume.size_bytes() / self.block_size as u64
     }
+
+    /// Standard INQUIRY data (36 bytes): direct-access block device, SPC-3.
+    pub(crate) fn standard_inquiry(&self) -> Vec<u8> {
+        let mut d = vec![0u8; 36];
+        d[0] = 0x00; // peripheral qualifier 000b + device type 0x00 (block device)
+        d[1] = if self.removable { 0x80 } else { 0x00 };
+        d[2] = 0x05; // SPC-3
+        d[3] = 0x02; // response data format
+        d[4] = 31; // additional length (36 - 5)
+        d[8..16].copy_from_slice(&self.vendor);
+        d[16..32].copy_from_slice(&self.product);
+        d[32..36].copy_from_slice(&self.revision);
+        d
+    }
+
+    /// VPD page 0x80 (unit serial number).
+    pub(crate) fn vpd_unit_serial(&self) -> Vec<u8> {
+        let sn = self.serial.as_bytes();
+        let mut d = vec![0u8; 4 + sn.len()];
+        d[0] = 0x00; // device type
+        d[1] = 0x80; // page code
+        d[3] = sn.len() as u8; // page length
+        d[4..].copy_from_slice(sn);
+        d
+    }
+
+    /// VPD page 0x83 (device identification): one T10 vendor-ID designator.
+    pub(crate) fn vpd_device_id(&self) -> Vec<u8> {
+        let mut id = Vec::new();
+        id.extend_from_slice(&self.vendor);
+        id.extend_from_slice(&self.product);
+        id.extend_from_slice(self.serial.as_bytes());
+        let mut desc = vec![0u8; 4];
+        desc[0] = 0x02; // code set: ASCII
+        desc[1] = 0x01; // designator type 1 (T10 vendor ID), association 00
+        desc[3] = id.len() as u8; // designator length
+        desc.extend_from_slice(&id);
+        let mut d = vec![0u8; 4];
+        d[0] = 0x00; // device type
+        d[1] = 0x83; // page code
+        let plen = desc.len() as u16;
+        d[2..4].copy_from_slice(&plen.to_be_bytes());
+        d.extend_from_slice(&desc);
+        d
+    }
 }
 
 /// One iSCSI target = one client. Owns its LUNs, indexed by LUN number.
@@ -188,6 +233,7 @@ mod tests {
     use super::cdb::op;
     use super::sense;
     use super::test_support::*;
+    use super::ScsiTarget;
 
     #[test]
     fn lun_number_decodes_flat_addressing() {
@@ -226,5 +272,57 @@ mod tests {
         let out = t.execute(&cmd(lun_field(7), cdb), &[]); // LUN 7 not configured
         assert_eq!(out.status, sense::CHECK_CONDITION);
         assert_eq!(out.sense[12], sense::ASC_LUN_NOT_SUPPORTED.0);
+    }
+
+    #[test]
+    fn standard_inquiry_reports_block_device_and_idents() {
+        let t = target(vec![0u8; 4096]);
+        let mut cdb = [0u8; 16];
+        cdb[0] = op::INQUIRY;
+        let out = t.execute(&cmd(lun_field(0), cdb), &[]);
+        assert_eq!(out.status, sense::GOOD);
+        assert_eq!(out.data[0], 0x00); // direct-access block device
+        assert_eq!(out.data[2], 0x05); // SPC-3
+        assert_eq!(out.data[4], 31); // additional length
+        assert_eq!(&out.data[8..16], b"XBOOT   ");
+        assert_eq!(&out.data[16..21], b"VDISK");
+    }
+
+    #[test]
+    fn inquiry_evpd_serial_page_carries_serial() {
+        let t = ScsiTarget::new(vec![Some(lu(vec![0u8; 4096]).with_serial("ABC123"))]);
+        let mut cdb = [0u8; 16];
+        cdb[0] = op::INQUIRY;
+        cdb[1] = 0x01; // EVPD
+        cdb[2] = 0x80; // unit serial number page
+        let out = t.execute(&cmd(lun_field(0), cdb), &[]);
+        assert_eq!(out.status, sense::GOOD);
+        assert_eq!(out.data[1], 0x80); // page code echoed
+        assert_eq!(&out.data[4..], b"ABC123");
+    }
+
+    #[test]
+    fn inquiry_evpd_supported_pages_lists_the_three() {
+        let t = target(vec![0u8; 4096]);
+        let mut cdb = [0u8; 16];
+        cdb[0] = op::INQUIRY;
+        cdb[1] = 0x01;
+        cdb[2] = 0x00; // supported VPD pages
+        let out = t.execute(&cmd(lun_field(0), cdb), &[]);
+        assert_eq!(out.status, sense::GOOD);
+        assert_eq!(&out.data[4..7], &[0x00, 0x80, 0x83]);
+    }
+
+    #[test]
+    fn inquiry_unknown_vpd_page_is_invalid_field() {
+        let t = target(vec![0u8; 4096]);
+        let mut cdb = [0u8; 16];
+        cdb[0] = op::INQUIRY;
+        cdb[1] = 0x01;
+        cdb[2] = 0xde; // not a supported page
+        let out = t.execute(&cmd(lun_field(0), cdb), &[]);
+        assert_eq!(out.status, sense::CHECK_CONDITION);
+        assert_eq!(out.data.len(), 0);
+        assert_eq!(out.sense[12], sense::ASC_INVALID_FIELD_IN_CDB.0);
     }
 }
