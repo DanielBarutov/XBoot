@@ -549,3 +549,47 @@ mod tests {
         assert_eq!(out.data[17], 2); // second LUN number == 2
     }
 }
+
+#[cfg(test)]
+mod prop {
+    use super::sense;
+    use super::test_support::*;
+    use proptest::prelude::*;
+
+    proptest! {
+        // execute never panics on an arbitrary CDB + arbitrary LUN field.
+        #[test]
+        fn execute_never_panics(cdb in proptest::array::uniform16(any::<u8>()), lun in any::<u64>()) {
+            let t = target(vec![0u8; 4096]);
+            let _ = t.execute(&cmd(lun, cdb), &[]);
+        }
+
+        // Status/sense invariant: CHECK CONDITION <=> non-empty sense.
+        #[test]
+        fn status_matches_sense_presence(cdb in proptest::array::uniform16(any::<u8>())) {
+            let t = target(vec![0u8; 4096]);
+            let out = t.execute(&cmd(lun_field(0), cdb), &[]);
+            if out.status == sense::CHECK_CONDITION {
+                prop_assert!(!out.sense.is_empty());
+            } else {
+                prop_assert_eq!(out.status, sense::GOOD);
+                prop_assert!(out.sense.is_empty());
+            }
+        }
+
+        // A READ(10) fully in range returns exactly blocks * block_size bytes.
+        #[test]
+        fn read10_in_range_data_length(lba in 0u16..8, blocks in 1u16..=8) {
+            // 8-block disk; only keep cases that stay in range.
+            prop_assume!(lba as u32 + blocks as u32 <= 8);
+            let t = target(vec![0u8; 4096]);
+            let mut cdb = [0u8; 16];
+            cdb[0] = super::cdb::op::READ_10;
+            cdb[2..6].copy_from_slice(&(lba as u32).to_be_bytes());
+            cdb[7..9].copy_from_slice(&blocks.to_be_bytes());
+            let out = t.execute(&cmd(lun_field(0), cdb), &[]);
+            prop_assert_eq!(out.status, sense::GOOD);
+            prop_assert_eq!(out.data.len(), blocks as usize * 512);
+        }
+    }
+}
