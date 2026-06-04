@@ -113,7 +113,11 @@ fn check_boot(errors: &mut Vec<ValidationError>, boot: &crate::config::BootConfi
         });
     }
     let url = &boot.http_script_url;
-    if !(url.starts_with("http://") || url.starts_with("https://")) {
+    if url.is_empty() {
+        errors.push(ValidationError::EmptyBootField {
+            field: "http_script_url".to_string(),
+        });
+    } else if !(url.starts_with("http://") || url.starts_with("https://")) {
         errors.push(ValidationError::InvalidHttpUrl(url.clone()));
     }
 }
@@ -375,6 +379,24 @@ http_script_url = "tftp://192.168.1.10/boot.ipxe"
         assert!(errs
             .iter()
             .any(|e| matches!(e, ValidationError::InvalidHttpUrl(u) if u.starts_with("tftp://"))));
+    }
+
+    #[test]
+    fn rejects_empty_uefi_filename() {
+        let cfg = parse(
+            r#"
+[boot]
+server_ip       = "192.168.1.10"
+bind            = "0.0.0.0"
+bios_filename   = "undionly.kpxe"
+uefi_filename   = ""
+http_script_url = "http://192.168.1.10/boot.ipxe"
+"#,
+        );
+        let errs = validate(&cfg).unwrap_err().0;
+        assert!(errs
+            .iter()
+            .any(|e| matches!(e, ValidationError::EmptyBootField { field } if field == "uefi_filename")));
     }
 
     #[test]
