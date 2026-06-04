@@ -2,5 +2,6 @@
 //! (phase 06a). Pure codec/decision core (`packet`, `options`, `decide`) +
 //! thin async I/O (`server`).
 
+pub mod decide;
 pub mod options;
 pub mod packet;
