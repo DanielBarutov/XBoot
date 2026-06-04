@@ -4,6 +4,7 @@
 //! sequencing lives in phase 05c; SCSI CDB interpretation in phase 05b.
 
 mod pdu;
+pub mod registry;
 pub mod scsi;
 pub mod session;
 pub mod text;
