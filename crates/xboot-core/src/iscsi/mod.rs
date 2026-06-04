@@ -4,13 +4,16 @@
 //! sequencing lives in phase 05c; SCSI CDB interpretation in phase 05b.
 
 mod pdu;
+pub mod registry;
 pub mod scsi;
+pub mod session;
 pub mod text;
+pub mod transport;
 
 pub use pdu::{
     decode, LoginRequest, LoginResponse, LogoutRequest, LogoutResponse, NopIn, NopOut, R2t, Reject,
-    Request, ScsiCommand, ScsiDataIn, ScsiDataOut, ScsiResponse, TaskMgmt, TextRequest,
-    TextResponse,
+    Request, ScsiCommand, ScsiDataIn, ScsiDataOut, ScsiResponse, TaskMgmt, TaskMgmtResponse,
+    TextRequest, TextResponse,
 };
 
 use thiserror::Error;
@@ -63,6 +66,9 @@ pub enum PduError {
 pub(crate) fn pad4(n: usize) -> usize {
     (4 - (n % 4)) % 4
 }
+
+#[cfg(test)]
+mod testkit;
 
 #[cfg(test)]
 mod tests {

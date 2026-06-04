@@ -492,6 +492,29 @@ impl LogoutResponse {
 }
 
 #[derive(Debug, Clone)]
+pub struct TaskMgmtResponse {
+    pub response: u8,
+    pub itt: u32,
+    pub stat_sn: u32,
+    pub exp_cmd_sn: u32,
+    pub max_cmd_sn: u32,
+}
+
+impl TaskMgmtResponse {
+    pub fn encode(&self) -> Vec<u8> {
+        let mut h = [0u8; BHS_LEN];
+        h[0] = opcode::TASK_MGMT_RESP;
+        h[1] = 0x80; // F always set
+        h[2] = self.response; // 0x00 = Function Complete
+        put32(&mut h, 16, self.itt);
+        put32(&mut h, 24, self.stat_sn);
+        put32(&mut h, 28, self.exp_cmd_sn);
+        put32(&mut h, 32, self.max_cmd_sn);
+        frame(h, &[])
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct Reject {
     pub reason: u8,
     pub stat_sn: u32,
