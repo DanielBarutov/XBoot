@@ -28,6 +28,10 @@ pub enum ValidationError {
     InvalidMac(String),
     #[error("duplicate client MAC address: {0}")]
     DuplicateMac(String),
+    #[error("boot.http_script_url must start with http:// or https://: {0}")]
+    InvalidHttpUrl(String),
+    #[error("boot.{field} must not be empty")]
+    EmptyBootField { field: String },
 }
 
 /// Collection of validation errors with a readable multi-line `Display`.
@@ -97,6 +101,27 @@ fn check_profile(
     );
 }
 
+fn check_boot(errors: &mut Vec<ValidationError>, boot: &crate::config::BootConfig) {
+    if boot.bios_filename.is_empty() {
+        errors.push(ValidationError::EmptyBootField {
+            field: "bios_filename".to_string(),
+        });
+    }
+    if boot.uefi_filename.is_empty() {
+        errors.push(ValidationError::EmptyBootField {
+            field: "uefi_filename".to_string(),
+        });
+    }
+    let url = &boot.http_script_url;
+    if url.is_empty() {
+        errors.push(ValidationError::EmptyBootField {
+            field: "http_script_url".to_string(),
+        });
+    } else if !(url.starts_with("http://") || url.starts_with("https://")) {
+        errors.push(ValidationError::InvalidHttpUrl(url.clone()));
+    }
+}
+
 /// Validate referential integrity, disk-type/role consistency, and MAC formats.
 pub fn validate(cfg: &Config) -> Result<(), ValidationErrors> {
     let mut errors: Vec<ValidationError> = Vec::new();
@@ -128,6 +153,10 @@ pub fn validate(cfg: &Config) -> Result<(), ValidationErrors> {
             &d.writeback,
             "client_defaults",
         );
+    }
+
+    if let Some(boot) = &cfg.boot {
+        check_boot(&mut errors, boot);
     }
 
     if errors.is_empty() {
@@ -317,5 +346,74 @@ writeback = "ghost"
 "#,
         );
         assert!(validate(&cfg).is_err());
+    }
+
+    #[test]
+    fn accepts_valid_boot_section() {
+        let cfg = parse(
+            r#"
+[boot]
+server_ip       = "192.168.1.10"
+bind            = "0.0.0.0"
+bios_filename   = "undionly.kpxe"
+uefi_filename   = "ipxe.efi"
+http_script_url = "http://192.168.1.10/boot.ipxe"
+"#,
+        );
+        assert!(validate(&cfg).is_ok());
+    }
+
+    #[test]
+    fn rejects_non_http_boot_url() {
+        let cfg = parse(
+            r#"
+[boot]
+server_ip       = "192.168.1.10"
+bind            = "0.0.0.0"
+bios_filename   = "undionly.kpxe"
+uefi_filename   = "ipxe.efi"
+http_script_url = "tftp://192.168.1.10/boot.ipxe"
+"#,
+        );
+        let errs = validate(&cfg).unwrap_err().0;
+        assert!(errs
+            .iter()
+            .any(|e| matches!(e, ValidationError::InvalidHttpUrl(u) if u.starts_with("tftp://"))));
+    }
+
+    #[test]
+    fn rejects_empty_uefi_filename() {
+        let cfg = parse(
+            r#"
+[boot]
+server_ip       = "192.168.1.10"
+bind            = "0.0.0.0"
+bios_filename   = "undionly.kpxe"
+uefi_filename   = ""
+http_script_url = "http://192.168.1.10/boot.ipxe"
+"#,
+        );
+        let errs = validate(&cfg).unwrap_err().0;
+        assert!(errs
+            .iter()
+            .any(|e| matches!(e, ValidationError::EmptyBootField { field } if field == "uefi_filename")));
+    }
+
+    #[test]
+    fn rejects_empty_boot_filename() {
+        let cfg = parse(
+            r#"
+[boot]
+server_ip       = "192.168.1.10"
+bind            = "0.0.0.0"
+bios_filename   = ""
+uefi_filename   = "ipxe.efi"
+http_script_url = "http://192.168.1.10/boot.ipxe"
+"#,
+        );
+        let errs = validate(&cfg).unwrap_err().0;
+        assert!(errs
+            .iter()
+            .any(|e| matches!(e, ValidationError::EmptyBootField { field } if field == "bios_filename")));
     }
 }

@@ -1,3 +1,5 @@
+use std::net::{IpAddr, Ipv4Addr};
+
 use serde::Deserialize;
 
 use crate::config::ByteSize;
@@ -55,6 +57,22 @@ pub struct ClientDefaults {
     pub writeback: String,
 }
 
+/// Optional `[boot]` section: enables the proxyDHCP / PXE network-boot service.
+/// When absent, the DHCP server is not started.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct BootConfig {
+    /// Our IP — used for next-server (siaddr / option 66) and server-id (option 54).
+    pub server_ip: Ipv4Addr,
+    /// Listen address for the `:67` and `:4011` UDP sockets.
+    pub bind: IpAddr,
+    /// TFTP file for legacy BIOS (arch 0x0000), served by 06b.
+    pub bios_filename: String,
+    /// TFTP file for UEFI x64 (arch 0x0007/0x0009), served by 06b.
+    pub uefi_filename: String,
+    /// iPXE arm HTTP boot script; `?mac=...` is appended at runtime. Served by 06c.
+    pub http_script_url: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct Config {
     #[serde(rename = "disk", default)]
@@ -63,6 +81,8 @@ pub struct Config {
     pub clients: Vec<Client>,
     #[serde(default)]
     pub client_defaults: Option<ClientDefaults>,
+    #[serde(default)]
+    pub boot: Option<BootConfig>,
 }
 
 #[cfg(test)]
@@ -121,6 +141,42 @@ writeback = "wb-nvme"
         assert_eq!(cfg.clients[0].name.as_deref(), Some("PC-01"));
 
         assert!(cfg.client_defaults.is_some());
+    }
+
+    #[test]
+    fn parses_boot_section() {
+        let cfg: Config = toml::from_str(
+            r#"
+[boot]
+server_ip       = "192.168.1.10"
+bind            = "0.0.0.0"
+bios_filename   = "undionly.kpxe"
+uefi_filename   = "ipxe.efi"
+http_script_url = "http://192.168.1.10/boot.ipxe"
+"#,
+        )
+        .unwrap();
+        let boot = cfg.boot.expect("boot section present");
+        assert_eq!(boot.server_ip, Ipv4Addr::new(192, 168, 1, 10));
+        assert_eq!(boot.bind, IpAddr::V4(Ipv4Addr::UNSPECIFIED));
+        assert_eq!(boot.bios_filename, "undionly.kpxe");
+        assert_eq!(boot.uefi_filename, "ipxe.efi");
+        assert_eq!(boot.http_script_url, "http://192.168.1.10/boot.ipxe");
+    }
+
+    #[test]
+    fn boot_section_is_optional() {
+        let cfg: Config = toml::from_str(
+            r#"
+[[disk]]
+id = "img"
+type = "image"
+backing = "x"
+ram_cache = "1GB"
+"#,
+        )
+        .unwrap();
+        assert!(cfg.boot.is_none());
     }
 
     #[test]
