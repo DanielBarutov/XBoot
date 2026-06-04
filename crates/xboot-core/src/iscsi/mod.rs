@@ -5,6 +5,7 @@
 
 mod pdu;
 pub mod scsi;
+pub mod session;
 pub mod text;
 
 pub use pdu::{
