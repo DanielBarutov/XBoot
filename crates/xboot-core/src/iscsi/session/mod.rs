@@ -141,10 +141,72 @@ impl Connection {
         })
     }
 
-    // FullFeature dispatch is filled in by Tasks 4-6.
     fn handle_full_feature(&mut self, req: Request, bhs: &[u8]) -> Vec<Outbound> {
-        let _ = req;
-        vec![self.reject(reject::COMMAND_NOT_SUPPORTED, bhs)]
+        match req {
+            Request::ScsiCommand(cmd) => self.scsi_command(cmd, bhs),
+            _ => vec![self.reject(reject::COMMAND_NOT_SUPPORTED, bhs)],
+        }
+    }
+
+    /// Execute a SCSI command. READ data rides back in Data-In PDUs (status on the
+    /// final one); WRITE is handled in Task 5; non-data commands return a SCSI
+    /// Response. `bhs` is kept for Task 5's protocol rejects.
+    fn scsi_command(&mut self, cmd: crate::iscsi::ScsiCommand, _bhs: &[u8]) -> Vec<Outbound> {
+        let target = match &self.target {
+            Some(t) => t.clone(),
+            None => return vec![self.reject(reject::PROTOCOL_ERROR, _bhs)],
+        };
+        self.exp_cmd_sn = self.exp_cmd_sn.wrapping_add(1);
+        let outcome = target.execute(&cmd, &cmd.data);
+
+        // READ that produced data -> chunked Data-In with status on the final PDU.
+        if cmd.read && outcome.status == 0x00 && !outcome.data.is_empty() {
+            return self.data_in_chunks(&cmd, outcome.data);
+        }
+        // Everything else (TEST UNIT READY, INQUIRY, CHECK CONDITION, ...) -> SCSI Response.
+        let residual = cmd.edtl.saturating_sub(outcome.data.len() as u32);
+        vec![Outbound::ScsiResp(ScsiResponse {
+            response: 0x00, // command completed at target
+            status: outcome.status,
+            itt: cmd.itt,
+            stat_sn: self.next_stat_sn(),
+            exp_cmd_sn: self.exp_cmd_sn,
+            max_cmd_sn: self.max_cmd_sn(),
+            residual,
+            sense: outcome.sense,
+        })]
+    }
+
+    /// Split read data into Data-In PDUs of at most MaxRecvDataSegmentLength bytes,
+    /// status collapsed onto the final PDU.
+    fn data_in_chunks(&mut self, cmd: &crate::iscsi::ScsiCommand, data: Vec<u8>) -> Vec<Outbound> {
+        let seg = self.params.max_recv_data_segment_length.max(512) as usize;
+        let mut out = Vec::new();
+        let mut offset = 0usize;
+        let mut data_sn = 0u32;
+        let total = data.len();
+        while offset < total {
+            let end = (offset + seg).min(total);
+            let is_last = end == total;
+            out.push(Outbound::DataIn(ScsiDataIn {
+                final_: is_last,
+                ack: false,
+                has_status: is_last,
+                status: 0x00, // GOOD; meaningful only on the final (status) PDU
+                lun: cmd.lun,
+                itt: cmd.itt,
+                ttt: 0xffff_ffff,
+                stat_sn: if is_last { self.next_stat_sn() } else { self.stat_sn },
+                exp_cmd_sn: self.exp_cmd_sn,
+                max_cmd_sn: self.max_cmd_sn(),
+                data_sn,
+                buffer_offset: offset as u32,
+                data: data[offset..end].to_vec(),
+            }));
+            offset = end;
+            data_sn += 1;
+        }
+        out
     }
 }
 
@@ -274,5 +336,107 @@ mod login_tests {
         let out = c.handle(Request::NopOut(nop), &[0u8; 48]);
         assert!(matches!(out[0], Outbound::Reject(_)));
         assert_eq!(c.stage(), Stage::Closing);
+    }
+}
+
+#[cfg(test)]
+mod read_tests {
+    use super::test_support::*;
+    use super::*;
+    use crate::iscsi::{Request, ScsiCommand};
+
+    /// Drive a connection straight to FullFeature for command tests.
+    fn full_feature() -> Connection {
+        let mut c = conn();
+        let req = crate::iscsi::LoginRequest {
+            transit: true,
+            continue_: false,
+            csg: 1,
+            nsg: 1,
+            version_max: 0,
+            version_min: 0,
+            isid: [0, 0, 0, 0, 0, 1],
+            tsih: 0,
+            itt: 1,
+            cid: 0,
+            cmd_sn: 0,
+            exp_stat_sn: 0,
+            text: vec![
+                ("TargetName".into(), IQN.into()),
+                ("MaxRecvDataSegmentLength".into(), "4096".into()),
+            ],
+        };
+        c.handle(Request::Login(req), &[0u8; 48]);
+        assert_eq!(c.stage(), Stage::FullFeature);
+        c
+    }
+
+    fn read10(lba: u32, blocks: u16, edtl: u32, itt: u32) -> ScsiCommand {
+        let mut cdb = [0u8; 16];
+        cdb[0] = 0x28; // READ(10)
+        cdb[2..6].copy_from_slice(&lba.to_be_bytes());
+        cdb[7..9].copy_from_slice(&blocks.to_be_bytes());
+        ScsiCommand {
+            final_: true,
+            read: true,
+            write: false,
+            attr: 0,
+            lun: 0,
+            itt,
+            edtl,
+            cmd_sn: 0,
+            exp_stat_sn: 0,
+            cdb,
+            data: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn read_one_block_yields_one_data_in_with_status() {
+        let mut c = full_feature();
+        // 1 block = 512 bytes <= MaxRecvDataSegmentLength 4096 -> single Data-In.
+        let out = c.handle(Request::ScsiCommand(read10(0, 1, 512, 10)), &[0u8; 48]);
+        assert_eq!(out.len(), 1);
+        let Outbound::DataIn(d) = &out[0] else {
+            panic!("expected Data-In");
+        };
+        assert!(d.final_);
+        assert!(d.has_status);
+        assert_eq!(d.status, 0x00); // GOOD
+        assert_eq!(d.data.len(), 512);
+        assert_eq!(d.buffer_offset, 0);
+    }
+
+    #[test]
+    fn read_chunks_by_max_recv_data_segment_length() {
+        let mut c = full_feature();
+        // Force two chunks: read 8 blocks (4096) with cap 2048.
+        c.params.max_recv_data_segment_length = 2048;
+        let out = c.handle(Request::ScsiCommand(read10(0, 8, 4096, 11)), &[0u8; 48]);
+        // 4096 / 2048 = 2 Data-In PDUs.
+        assert_eq!(out.len(), 2);
+        let Outbound::DataIn(d0) = &out[0] else { panic!() };
+        let Outbound::DataIn(d1) = &out[1] else { panic!() };
+        assert!(!d0.final_ && !d0.has_status);
+        assert_eq!(d0.data_sn, 0);
+        assert_eq!(d0.buffer_offset, 0);
+        assert_eq!(d0.data.len(), 2048);
+        assert!(d1.final_ && d1.has_status);
+        assert_eq!(d1.data_sn, 1);
+        assert_eq!(d1.buffer_offset, 2048);
+        assert_eq!(d1.data.len(), 2048);
+    }
+
+    #[test]
+    fn read_check_condition_yields_scsi_response_with_sense() {
+        let mut c = full_feature();
+        // LBA 100 on an 8-block disk -> out of range -> CHECK CONDITION.
+        let out = c.handle(Request::ScsiCommand(read10(100, 1, 512, 12)), &[0u8; 48]);
+        assert_eq!(out.len(), 1);
+        let Outbound::ScsiResp(r) = &out[0] else {
+            panic!("expected SCSI Response");
+        };
+        assert_eq!(r.status, 0x02); // CHECK CONDITION
+        assert!(!r.sense.is_empty());
     }
 }
