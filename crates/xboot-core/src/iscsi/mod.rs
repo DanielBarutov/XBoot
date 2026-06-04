@@ -8,6 +8,7 @@ pub mod registry;
 pub mod scsi;
 pub mod session;
 pub mod text;
+pub mod transport;
 
 pub use pdu::{
     decode, LoginRequest, LoginResponse, LogoutRequest, LogoutResponse, NopIn, NopOut, R2t, Reject,
