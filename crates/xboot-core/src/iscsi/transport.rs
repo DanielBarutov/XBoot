@@ -81,7 +81,10 @@ mod tests {
     }
 
     fn registry() -> Arc<TargetRegistry> {
-        let vol = Volume::new(Box::new(MemStore(vec![0u8; 4096])), Box::new(RamOverlay::new()));
+        let vol = Volume::new(
+            Box::new(MemStore(vec![0u8; 4096])),
+            Box::new(RamOverlay::new()),
+        );
         let mut reg = TargetRegistry::new();
         reg.insert(IQN, ScsiTarget::new(vec![Some(LogicalUnit::new(vol))]));
         Arc::new(reg)
@@ -113,7 +116,9 @@ mod tests {
         assert_eq!(resp[3], 0x00); // GOOD
 
         // READ block 2 back.
-        sock.write_all(&testkit::read10_pdu(51, 2, 1)).await.unwrap();
+        sock.write_all(&testkit::read10_pdu(51, 2, 1))
+            .await
+            .unwrap();
         let resp = read_one_pdu(&mut sock).await;
         assert_eq!(resp[0] & 0x3f, crate::iscsi::opcode::DATA_IN);
         assert_eq!(&resp[BHS_LEN..BHS_LEN + 512], &payload[..]);
@@ -122,8 +127,14 @@ mod tests {
     fn multi_registry(n: u8) -> Arc<TargetRegistry> {
         let mut reg = TargetRegistry::new();
         for i in 0..n {
-            let vol = Volume::new(Box::new(MemStore(vec![0u8; 4096])), Box::new(RamOverlay::new()));
-            reg.insert(format!("{IQN}-{i}"), ScsiTarget::new(vec![Some(LogicalUnit::new(vol))]));
+            let vol = Volume::new(
+                Box::new(MemStore(vec![0u8; 4096])),
+                Box::new(RamOverlay::new()),
+            );
+            reg.insert(
+                format!("{IQN}-{i}"),
+                ScsiTarget::new(vec![Some(LogicalUnit::new(vol))]),
+            );
         }
         Arc::new(reg)
     }

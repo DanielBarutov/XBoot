@@ -51,7 +51,9 @@ impl SessionParams {
                 }
             }
             "ImmediateData" => self.immediate_data &= value.eq_ignore_ascii_case("Yes"),
-            "InitialR2T" => self.initial_r2t = self.initial_r2t && value.eq_ignore_ascii_case("Yes"),
+            "InitialR2T" => {
+                self.initial_r2t = self.initial_r2t && value.eq_ignore_ascii_case("Yes")
+            }
             _ => {}
         }
     }

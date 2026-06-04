@@ -121,7 +121,10 @@ mod tests {
     }
 
     fn conn() -> Connection {
-        let vol = Volume::new(Box::new(MemStore(vec![0u8; 4096])), Box::new(RamOverlay::new()));
+        let vol = Volume::new(
+            Box::new(MemStore(vec![0u8; 4096])),
+            Box::new(RamOverlay::new()),
+        );
         let mut reg = TargetRegistry::new();
         reg.insert(IQN, ScsiTarget::new(vec![Some(LogicalUnit::new(vol))]));
         Connection::new(Arc::new(reg))

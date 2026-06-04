@@ -54,7 +54,10 @@ mod tests {
     }
 
     fn one_lun_target() -> ScsiTarget {
-        let vol = Volume::new(Box::new(MemStore(vec![0u8; 4096])), Box::new(RamOverlay::new()));
+        let vol = Volume::new(
+            Box::new(MemStore(vec![0u8; 4096])),
+            Box::new(RamOverlay::new()),
+        );
         ScsiTarget::new(vec![Some(LogicalUnit::new(vol))])
     }
 

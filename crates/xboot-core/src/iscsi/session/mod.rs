@@ -261,7 +261,11 @@ impl Connection {
                 lun: cmd.lun,
                 itt: cmd.itt,
                 ttt: 0xffff_ffff,
-                stat_sn: if is_last { self.next_stat_sn() } else { self.stat_sn },
+                stat_sn: if is_last {
+                    self.next_stat_sn()
+                } else {
+                    self.stat_sn
+                },
                 exp_cmd_sn: self.exp_cmd_sn,
                 max_cmd_sn: self.max_cmd_sn(),
                 data_sn,
@@ -425,7 +429,10 @@ mod login_tests {
             cid: 0,
             cmd_sn: 0,
             exp_stat_sn: 0,
-            text: keys.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
+            text: keys
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
         }
     }
 
@@ -433,7 +440,12 @@ mod login_tests {
     fn collapsed_login_to_full_feature_succeeds() {
         let mut c = conn();
         // Operational stage (1) transiting to FullFeature (1), declaring TargetName.
-        let req = login_req(true, 1, 1, &[("TargetName", IQN), ("MaxBurstLength", "16384")]);
+        let req = login_req(
+            true,
+            1,
+            1,
+            &[("TargetName", IQN), ("MaxBurstLength", "16384")],
+        );
         let out = c.handle(Request::Login(req), &[0u8; 48]);
         assert_eq!(out.len(), 1);
         let Outbound::Login(resp) = &out[0] else {
@@ -471,13 +483,21 @@ mod login_tests {
     #[test]
     fn negotiated_keys_are_echoed_in_response() {
         let mut c = conn();
-        let req = login_req(true, 1, 1, &[("TargetName", IQN), ("MaxBurstLength", "16384")]);
+        let req = login_req(
+            true,
+            1,
+            1,
+            &[("TargetName", IQN), ("MaxBurstLength", "16384")],
+        );
         let out = c.handle(Request::Login(req), &[0u8; 48]);
         let Outbound::Login(resp) = &out[0] else {
             panic!("expected LoginResponse");
         };
         let mbl = resp.text.iter().find(|(k, _)| k == "MaxBurstLength");
-        assert_eq!(mbl, Some(&("MaxBurstLength".to_string(), "16384".to_string())));
+        assert_eq!(
+            mbl,
+            Some(&("MaxBurstLength".to_string(), "16384".to_string()))
+        );
     }
 
     #[test]
@@ -574,8 +594,12 @@ mod read_tests {
         let out = c.handle(Request::ScsiCommand(read10(0, 8, 4096, 11)), &[0u8; 48]);
         // 4096 / 2048 = 2 Data-In PDUs.
         assert_eq!(out.len(), 2);
-        let Outbound::DataIn(d0) = &out[0] else { panic!() };
-        let Outbound::DataIn(d1) = &out[1] else { panic!() };
+        let Outbound::DataIn(d0) = &out[0] else {
+            panic!()
+        };
+        let Outbound::DataIn(d1) = &out[1] else {
+            panic!()
+        };
         assert!(!d0.final_ && !d0.has_status);
         assert_eq!(d0.data_sn, 0);
         assert_eq!(d0.buffer_offset, 0);
@@ -681,7 +705,9 @@ mod write_tests {
             data: vec![],
         };
         let back = c.handle(Request::ScsiCommand(rd), &[0u8; 48]);
-        let Outbound::DataIn(d) = &back[0] else { panic!() };
+        let Outbound::DataIn(d) = &back[0] else {
+            panic!()
+        };
         assert!(d.data.iter().all(|&b| b == 0xAB));
     }
 
@@ -689,7 +715,10 @@ mod write_tests {
     fn write_with_no_immediate_data_issues_r2t() {
         let mut c = full_feature();
         // No immediate data and 512 bytes expected -> target solicits with one R2T.
-        let out = c.handle(Request::ScsiCommand(write10(0, 1, 512, 22, vec![])), &[0u8; 48]);
+        let out = c.handle(
+            Request::ScsiCommand(write10(0, 1, 512, 22, vec![])),
+            &[0u8; 48],
+        );
         assert_eq!(out.len(), 1);
         let Outbound::R2t(r) = &out[0] else {
             panic!("expected R2T");
@@ -703,7 +732,10 @@ mod write_tests {
     #[test]
     fn data_out_completes_a_solicited_write() {
         let mut c = full_feature();
-        c.handle(Request::ScsiCommand(write10(0, 1, 512, 23, vec![])), &[0u8; 48]);
+        c.handle(
+            Request::ScsiCommand(write10(0, 1, 512, 23, vec![])),
+            &[0u8; 48],
+        );
         // Send the solicited Data-Out (final), which should trigger execute + Response.
         let dout = ScsiDataOut {
             final_: true,
@@ -727,7 +759,10 @@ mod write_tests {
     #[test]
     fn data_out_past_edtl_is_protocol_reject() {
         let mut c = full_feature();
-        c.handle(Request::ScsiCommand(write10(0, 1, 512, 24, vec![])), &[0u8; 48]);
+        c.handle(
+            Request::ScsiCommand(write10(0, 1, 512, 24, vec![])),
+            &[0u8; 48],
+        );
         let dout = ScsiDataOut {
             final_: true,
             lun: 0,
