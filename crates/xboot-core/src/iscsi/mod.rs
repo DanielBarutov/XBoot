@@ -67,6 +67,9 @@ pub(crate) fn pad4(n: usize) -> usize {
 }
 
 #[cfg(test)]
+mod testkit;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
