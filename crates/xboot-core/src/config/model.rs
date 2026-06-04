@@ -145,7 +145,6 @@ writeback = "wb-nvme"
 
     #[test]
     fn parses_boot_section() {
-        use std::net::{IpAddr, Ipv4Addr};
         let cfg: Config = toml::from_str(
             r#"
 [boot]
