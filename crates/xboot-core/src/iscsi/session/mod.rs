@@ -1,3 +1,278 @@
 //! iSCSI session layer (phase 05c): sans-I/O connection state machine.
+//!
+//! `Connection::handle` consumes one decoded `Request` (plus its raw 48-byte BHS,
+//! needed only to echo into a Reject) and returns the response PDUs to transmit.
+//! No sockets, no async — the tokio adapter in `transport.rs` does the I/O.
+#![allow(dead_code)] // WRITE-path fields (in_flight/PendingWrite) wired in by Task 5
 
+mod login;
 mod params;
+
+use crate::iscsi::registry::TargetRegistry;
+use crate::iscsi::scsi::ScsiTarget;
+use crate::iscsi::{
+    LoginResponse, LogoutResponse, NopIn, R2t, Reject, Request, ScsiDataIn, ScsiResponse,
+    TextResponse,
+};
+use params::SessionParams;
+use std::collections::HashMap;
+use std::sync::Arc;
+
+/// How many commands beyond ExpCmdSN we let the initiator queue.
+const QUEUE_DEPTH: u32 = 16;
+
+/// iSCSI Reject reason codes (RFC 7143 §11.17.1) we emit.
+pub mod reject {
+    pub const PROTOCOL_ERROR: u8 = 0x04;
+    pub const COMMAND_NOT_SUPPORTED: u8 = 0x05;
+    pub const INVALID_PDU_FIELD: u8 = 0x0a;
+}
+
+/// Session lifecycle stage.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Stage {
+    Login,
+    FullFeature,
+    Closing,
+}
+
+/// A target-to-initiator PDU the transport must encode and send.
+#[derive(Debug, Clone)]
+pub enum Outbound {
+    Login(LoginResponse),
+    ScsiResp(ScsiResponse),
+    DataIn(ScsiDataIn),
+    R2t(R2t),
+    NopIn(NopIn),
+    Text(TextResponse),
+    Logout(LogoutResponse),
+    Reject(Reject),
+}
+
+impl Outbound {
+    /// Serialize to wire bytes via the 05a builders.
+    pub fn encode(&self) -> Vec<u8> {
+        match self {
+            Outbound::Login(p) => p.encode(),
+            Outbound::ScsiResp(p) => p.encode(),
+            Outbound::DataIn(p) => p.encode(),
+            Outbound::R2t(p) => p.encode(),
+            Outbound::NopIn(p) => p.encode(),
+            Outbound::Text(p) => p.encode(),
+            Outbound::Logout(p) => p.encode(),
+            Outbound::Reject(p) => p.encode(),
+        }
+    }
+}
+
+/// Write data being gathered for one command until EDTL bytes have arrived.
+pub(crate) struct PendingWrite {
+    pub(crate) cmd: crate::iscsi::ScsiCommand,
+    pub(crate) buf: Vec<u8>,
+    pub(crate) received: u32,
+    pub(crate) r2t_sn: u32,
+}
+
+/// One iSCSI connection (= one session, single-connection in v1).
+pub struct Connection {
+    registry: Arc<TargetRegistry>,
+    stage: Stage,
+    params: SessionParams,
+    target: Option<Arc<ScsiTarget>>,
+    stat_sn: u32,
+    exp_cmd_sn: u32,
+    in_flight: HashMap<u32, PendingWrite>,
+}
+
+impl Connection {
+    pub fn new(registry: Arc<TargetRegistry>) -> Self {
+        Self {
+            registry,
+            stage: Stage::Login,
+            params: SessionParams::default(),
+            target: None,
+            stat_sn: 0,
+            exp_cmd_sn: 0,
+            in_flight: HashMap::new(),
+        }
+    }
+
+    pub fn stage(&self) -> Stage {
+        self.stage
+    }
+
+    /// The command window we advertise: ExpCmdSN .. ExpCmdSN + QUEUE_DEPTH.
+    pub(crate) fn max_cmd_sn(&self) -> u32 {
+        self.exp_cmd_sn.wrapping_add(QUEUE_DEPTH)
+    }
+
+    /// Return the current StatSN, then advance it (one per response-bearing PDU).
+    pub(crate) fn next_stat_sn(&mut self) -> u32 {
+        let s = self.stat_sn;
+        self.stat_sn = self.stat_sn.wrapping_add(1);
+        s
+    }
+
+    /// Handle one decoded request. `bhs` is the raw 48-byte header, echoed into a
+    /// Reject when needed. Returns the PDUs to transmit (possibly empty).
+    pub fn handle(&mut self, req: Request, bhs: &[u8]) -> Vec<Outbound> {
+        match (self.stage, req) {
+            (Stage::Login, Request::Login(lr)) => login::handle_login(self, lr),
+            (Stage::FullFeature, req) => self.handle_full_feature(req, bhs),
+            // Anything else (e.g. a SCSI command before login completes) is a
+            // protocol error: reject and close.
+            (_, _) => {
+                self.stage = Stage::Closing;
+                vec![self.reject(reject::PROTOCOL_ERROR, bhs)]
+            }
+        }
+    }
+
+    /// Build a Reject echoing the offending header, advancing StatSN.
+    pub(crate) fn reject(&mut self, reason: u8, bhs: &[u8]) -> Outbound {
+        let mut header = bhs.to_vec();
+        header.resize(crate::iscsi::BHS_LEN, 0);
+        Outbound::Reject(Reject {
+            reason,
+            stat_sn: self.next_stat_sn(),
+            exp_cmd_sn: self.exp_cmd_sn,
+            max_cmd_sn: self.max_cmd_sn(),
+            header,
+        })
+    }
+
+    // FullFeature dispatch is filled in by Tasks 4-6.
+    fn handle_full_feature(&mut self, req: Request, bhs: &[u8]) -> Vec<Outbound> {
+        let _ = req;
+        vec![self.reject(reject::COMMAND_NOT_SUPPORTED, bhs)]
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod test_support {
+    use super::*;
+    use crate::iscsi::scsi::{LogicalUnit, ScsiTarget};
+    use crate::storage::BackingStore;
+    use crate::volume::{RamOverlay, Volume};
+    use std::io;
+
+    pub(crate) const IQN: &str = "iqn.2026-06.dev.xboot:client-01";
+
+    pub(crate) struct MemStore(pub Vec<u8>);
+    impl BackingStore for MemStore {
+        fn size_bytes(&self) -> u64 {
+            self.0.len() as u64
+        }
+        fn read_at(&self, offset: u64, buf: &mut [u8]) -> io::Result<()> {
+            let s = offset as usize;
+            buf.copy_from_slice(&self.0[s..s + buf.len()]);
+            Ok(())
+        }
+    }
+
+    /// A registry with one target (IQN above) over an in-memory master of `bytes`.
+    pub(crate) fn registry(bytes: Vec<u8>) -> Arc<TargetRegistry> {
+        let vol = Volume::new(Box::new(MemStore(bytes)), Box::new(RamOverlay::new()));
+        let mut reg = TargetRegistry::new();
+        reg.insert(IQN, ScsiTarget::new(vec![Some(LogicalUnit::new(vol))]));
+        Arc::new(reg)
+    }
+
+    /// A fresh connection over a 4096-byte (8-block) target.
+    pub(crate) fn conn() -> Connection {
+        Connection::new(registry(vec![0u8; 4096]))
+    }
+}
+
+#[cfg(test)]
+mod login_tests {
+    use super::test_support::*;
+    use super::*;
+    use crate::iscsi::LoginRequest;
+
+    fn login_req(transit: bool, csg: u8, nsg: u8, keys: &[(&str, &str)]) -> LoginRequest {
+        LoginRequest {
+            transit,
+            continue_: false,
+            csg,
+            nsg,
+            version_max: 0,
+            version_min: 0,
+            isid: [0, 0, 0, 0, 0, 1],
+            tsih: 0,
+            itt: 1,
+            cid: 0,
+            cmd_sn: 0,
+            exp_stat_sn: 0,
+            text: keys.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
+        }
+    }
+
+    #[test]
+    fn collapsed_login_to_full_feature_succeeds() {
+        let mut c = conn();
+        // Operational stage (1) transiting to FullFeature (1), declaring TargetName.
+        let req = login_req(true, 1, 1, &[("TargetName", IQN), ("MaxBurstLength", "16384")]);
+        let out = c.handle(Request::Login(req), &[0u8; 48]);
+        assert_eq!(out.len(), 1);
+        let Outbound::Login(resp) = &out[0] else {
+            panic!("expected LoginResponse");
+        };
+        assert_eq!(resp.status_class, 0);
+        assert!(resp.transit);
+        assert_eq!(resp.nsg, 1);
+        assert_eq!(c.stage(), Stage::FullFeature);
+    }
+
+    #[test]
+    fn unknown_target_fails_login() {
+        let mut c = conn();
+        let req = login_req(true, 1, 1, &[("TargetName", "iqn.2026-06.dev.xboot:ghost")]);
+        let out = c.handle(Request::Login(req), &[0u8; 48]);
+        let Outbound::Login(resp) = &out[0] else {
+            panic!("expected LoginResponse");
+        };
+        assert_eq!(resp.status_class, 0x02); // target/initiator error
+        assert_eq!(c.stage(), Stage::Closing);
+    }
+
+    #[test]
+    fn missing_target_name_fails_login() {
+        let mut c = conn();
+        let req = login_req(true, 1, 1, &[("HeaderDigest", "None")]);
+        let out = c.handle(Request::Login(req), &[0u8; 48]);
+        let Outbound::Login(resp) = &out[0] else {
+            panic!("expected LoginResponse");
+        };
+        assert_eq!(resp.status_class, 0x02);
+    }
+
+    #[test]
+    fn negotiated_keys_are_echoed_in_response() {
+        let mut c = conn();
+        let req = login_req(true, 1, 1, &[("TargetName", IQN), ("MaxBurstLength", "16384")]);
+        let out = c.handle(Request::Login(req), &[0u8; 48]);
+        let Outbound::Login(resp) = &out[0] else {
+            panic!("expected LoginResponse");
+        };
+        let mbl = resp.text.iter().find(|(k, _)| k == "MaxBurstLength");
+        assert_eq!(mbl, Some(&("MaxBurstLength".to_string(), "16384".to_string())));
+    }
+
+    #[test]
+    fn scsi_command_before_full_feature_is_protocol_reject() {
+        let mut c = conn();
+        // A NopOut in the Login stage is out of place -> reject + close.
+        let nop = crate::iscsi::NopOut {
+            lun: 0,
+            itt: 5,
+            ttt: 0xffff_ffff,
+            cmd_sn: 0,
+            exp_stat_sn: 0,
+            data: vec![],
+        };
+        let out = c.handle(Request::NopOut(nop), &[0u8; 48]);
+        assert!(matches!(out[0], Outbound::Reject(_)));
+        assert_eq!(c.stage(), Stage::Closing);
+    }
+}
