@@ -119,6 +119,53 @@ mod tests {
         assert_eq!(&resp[BHS_LEN..BHS_LEN + 512], &payload[..]);
     }
 
+    fn multi_registry(n: u8) -> Arc<TargetRegistry> {
+        let mut reg = TargetRegistry::new();
+        for i in 0..n {
+            let vol = Volume::new(Box::new(MemStore(vec![0u8; 4096])), Box::new(RamOverlay::new()));
+            reg.insert(format!("{IQN}-{i}"), ScsiTarget::new(vec![Some(LogicalUnit::new(vol))]));
+        }
+        Arc::new(reg)
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_clients_are_isolated() {
+        let n: u8 = 8;
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(serve(listener, multi_registry(n)));
+
+        let mut handles = Vec::new();
+        for i in 0..n {
+            handles.push(tokio::spawn(async move {
+                let iqn = format!("{IQN}-{i}");
+                let mut sock = TcpStream::connect(addr).await.unwrap();
+                sock.write_all(&testkit::login_pdu(true, 1, 1, &[("TargetName", &iqn)]))
+                    .await
+                    .unwrap();
+                let _ = read_one_pdu(&mut sock).await;
+
+                let byte = 0x10 + i;
+                let payload = vec![byte; 512];
+                sock.write_all(&testkit::write10_immediate_pdu(1, 0, 1, &payload))
+                    .await
+                    .unwrap();
+                let _ = read_one_pdu(&mut sock).await;
+
+                sock.write_all(&testkit::read10_pdu(2, 0, 1)).await.unwrap();
+                let resp = read_one_pdu(&mut sock).await;
+                // Each client must read back exactly its own byte.
+                assert!(
+                    resp[BHS_LEN..BHS_LEN + 512].iter().all(|&b| b == byte),
+                    "client {i} saw cross-talk"
+                );
+            }));
+        }
+        for h in handles {
+            h.await.unwrap();
+        }
+    }
+
     /// Read exactly one PDU (BHS + data + pad) off the socket.
     async fn read_one_pdu(sock: &mut TcpStream) -> Vec<u8> {
         let mut buf = vec![0u8; BHS_LEN];
