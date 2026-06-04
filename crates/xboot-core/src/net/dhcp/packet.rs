@@ -133,6 +133,7 @@ pub fn encode(msg: &DhcpMessage) -> Vec<u8> {
     out[28..44].copy_from_slice(&msg.chaddr);
     out[COOKIE_OFFSET..MIN_LEN].copy_from_slice(&MAGIC_COOKIE);
     for opt in &msg.options {
+        debug_assert!(opt.data.len() <= 255, "option {} data exceeds 255 bytes", opt.code);
         out.push(opt.code);
         out.push(opt.data.len() as u8);
         out.extend_from_slice(&opt.data);
