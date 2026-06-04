@@ -1,3 +1,5 @@
+[workspace]
+
 [package]
 name = "xboot-fuzz"
 version = "0.0.0"
@@ -27,5 +29,11 @@ doc = false
 [[bin]]
 name = "iscsi_pdu"
 path = "fuzz_targets/iscsi_pdu.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "dhcp_decode"
+path = "fuzz_targets/dhcp_decode.rs"
 test = false
 doc = false
