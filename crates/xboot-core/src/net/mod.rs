@@ -1,3 +1,5 @@
+pub mod dhcp;
+
 use std::io;
 
 /// Abstraction over raw packet send/receive, hiding Windows vs Linux differences.
