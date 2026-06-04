@@ -155,4 +155,22 @@ mod tests {
         let m = msg(vec![]);
         assert_eq!(plan(&m, &cfg()), None);
     }
+
+    #[test]
+    fn ipxe_rfc3004_length_prefixed_user_class() {
+        // RFC 3004 encodes user-class as length-prefixed strings: \x04iPXE
+        let m = msg(vec![
+            DhcpOption {
+                code: USER_CLASS,
+                data: b"\x04iPXE".to_vec(),
+            },
+            DhcpOption {
+                code: CLIENT_SYSTEM_ARCH,
+                data: vec![0x00, 0x07],
+            },
+        ]);
+        let plan = plan(&m, &cfg()).unwrap();
+        assert!(plan.bootfile.starts_with("http://"));
+        assert_eq!(plan.next_server, None);
+    }
 }
