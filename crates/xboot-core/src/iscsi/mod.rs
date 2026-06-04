@@ -11,8 +11,8 @@ pub mod text;
 
 pub use pdu::{
     decode, LoginRequest, LoginResponse, LogoutRequest, LogoutResponse, NopIn, NopOut, R2t, Reject,
-    Request, ScsiCommand, ScsiDataIn, ScsiDataOut, ScsiResponse, TaskMgmt, TextRequest,
-    TextResponse,
+    Request, ScsiCommand, ScsiDataIn, ScsiDataOut, ScsiResponse, TaskMgmt, TaskMgmtResponse,
+    TextRequest, TextResponse,
 };
 
 use thiserror::Error;

@@ -46,6 +46,7 @@ pub enum Outbound {
     NopIn(NopIn),
     Text(TextResponse),
     Logout(LogoutResponse),
+    TaskMgmt(crate::iscsi::TaskMgmtResponse),
     Reject(Reject),
 }
 
@@ -60,6 +61,7 @@ impl Outbound {
             Outbound::NopIn(p) => p.encode(),
             Outbound::Text(p) => p.encode(),
             Outbound::Logout(p) => p.encode(),
+            Outbound::TaskMgmt(p) => p.encode(),
             Outbound::Reject(p) => p.encode(),
         }
     }
@@ -145,8 +147,65 @@ impl Connection {
         match req {
             Request::ScsiCommand(cmd) => self.scsi_command(cmd, bhs),
             Request::DataOut(d) => self.data_out(d, bhs),
-            _ => vec![self.reject(reject::COMMAND_NOT_SUPPORTED, bhs)],
+            Request::NopOut(n) => self.nop_in(n),
+            Request::Text(t) => self.text_response(t),
+            Request::TaskMgmt(t) => self.task_mgmt(t),
+            Request::Logout(l) => self.logout(l),
+            Request::Login(_) => vec![self.reject(reject::PROTOCOL_ERROR, bhs)],
+            Request::Unsupported { .. } => vec![self.reject(reject::COMMAND_NOT_SUPPORTED, bhs)],
         }
+    }
+
+    fn nop_in(&mut self, n: crate::iscsi::NopOut) -> Vec<Outbound> {
+        vec![Outbound::NopIn(NopIn {
+            lun: n.lun,
+            itt: n.itt,
+            ttt: 0xffff_ffff,
+            stat_sn: self.stat_sn, // Nop-In as a reply does not consume a StatSN
+            exp_cmd_sn: self.exp_cmd_sn,
+            max_cmd_sn: self.max_cmd_sn(),
+            data: n.data,
+        })]
+    }
+
+    fn text_response(&mut self, t: crate::iscsi::TextRequest) -> Vec<Outbound> {
+        // Minimal SendTargets: advertise the one target this connection serves.
+        let mut keys = Vec::new();
+        if t.text.iter().any(|(k, _)| k == "SendTargets") {
+            for iqn in self.registry.iqns() {
+                keys.push(("TargetName".to_string(), iqn));
+            }
+        }
+        vec![Outbound::Text(TextResponse {
+            final_: true,
+            continue_: false,
+            itt: t.itt,
+            ttt: 0xffff_ffff,
+            stat_sn: self.next_stat_sn(),
+            exp_cmd_sn: self.exp_cmd_sn,
+            max_cmd_sn: self.max_cmd_sn(),
+            text: keys,
+        })]
+    }
+
+    fn task_mgmt(&mut self, t: crate::iscsi::TaskMgmt) -> Vec<Outbound> {
+        vec![Outbound::TaskMgmt(crate::iscsi::TaskMgmtResponse {
+            response: 0x00, // function complete
+            itt: t.itt,
+            stat_sn: self.next_stat_sn(),
+            exp_cmd_sn: self.exp_cmd_sn,
+            max_cmd_sn: self.max_cmd_sn(),
+        })]
+    }
+
+    fn logout(&mut self, _l: crate::iscsi::LogoutRequest) -> Vec<Outbound> {
+        self.stage = Stage::Closing;
+        vec![Outbound::Logout(LogoutResponse {
+            response: 0x00, // connection or session closed successfully
+            stat_sn: self.next_stat_sn(),
+            exp_cmd_sn: self.exp_cmd_sn,
+            max_cmd_sn: self.max_cmd_sn(),
+        })]
     }
 
     /// Execute a SCSI command. READ data rides back in Data-In PDUs (status on the
@@ -681,5 +740,108 @@ mod write_tests {
         };
         let out = c.handle(Request::DataOut(dout), &[0u8; 48]);
         assert!(matches!(out[0], Outbound::Reject(_)));
+    }
+}
+
+#[cfg(test)]
+mod control_tests {
+    use super::test_support::*;
+    use super::*;
+    use crate::iscsi::{LogoutRequest, NopOut, Request, TaskMgmt, TextRequest};
+
+    fn full_feature() -> Connection {
+        let mut c = conn();
+        let req = crate::iscsi::LoginRequest {
+            transit: true,
+            continue_: false,
+            csg: 1,
+            nsg: 1,
+            version_max: 0,
+            version_min: 0,
+            isid: [0, 0, 0, 0, 0, 1],
+            tsih: 0,
+            itt: 1,
+            cid: 0,
+            cmd_sn: 0,
+            exp_stat_sn: 0,
+            text: vec![("TargetName".into(), IQN.into())],
+        };
+        c.handle(Request::Login(req), &[0u8; 48]);
+        c
+    }
+
+    #[test]
+    fn nop_out_is_echoed_as_nop_in() {
+        let mut c = full_feature();
+        let nop = NopOut {
+            lun: 0,
+            itt: 30,
+            ttt: 0xffff_ffff,
+            cmd_sn: 1,
+            exp_stat_sn: 0,
+            data: vec![1, 2, 3],
+        };
+        let out = c.handle(Request::NopOut(nop), &[0u8; 48]);
+        let Outbound::NopIn(n) = &out[0] else {
+            panic!("expected Nop-In")
+        };
+        assert_eq!(n.itt, 30);
+        assert_eq!(n.data, vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn sendtargets_text_lists_the_target() {
+        let mut c = full_feature();
+        let t = TextRequest {
+            final_: true,
+            continue_: false,
+            lun: 0,
+            itt: 31,
+            ttt: 0xffff_ffff,
+            cmd_sn: 1,
+            exp_stat_sn: 0,
+            text: vec![("SendTargets".into(), "All".into())],
+        };
+        let out = c.handle(Request::Text(t), &[0u8; 48]);
+        let Outbound::Text(r) = &out[0] else {
+            panic!("expected Text Response")
+        };
+        assert!(r.text.iter().any(|(k, v)| k == "TargetName" && v == IQN));
+    }
+
+    #[test]
+    fn task_mgmt_returns_function_complete() {
+        let mut c = full_feature();
+        let tm = TaskMgmt {
+            function: 1,
+            lun: 0,
+            itt: 32,
+            ref_task_tag: 0,
+            cmd_sn: 1,
+            exp_stat_sn: 0,
+        };
+        let out = c.handle(Request::TaskMgmt(tm), &[0u8; 48]);
+        assert!(matches!(out[0], Outbound::TaskMgmt(_)));
+        let bytes = out[0].encode();
+        assert_eq!(bytes[0], crate::iscsi::opcode::TASK_MGMT_RESP);
+        assert_eq!(bytes[2], 0x00); // function complete
+    }
+
+    #[test]
+    fn logout_responds_and_closes() {
+        let mut c = full_feature();
+        let lo = LogoutRequest {
+            reason: 0,
+            itt: 33,
+            cid: 0,
+            cmd_sn: 1,
+            exp_stat_sn: 0,
+        };
+        let out = c.handle(Request::Logout(lo), &[0u8; 48]);
+        let Outbound::Logout(r) = &out[0] else {
+            panic!("expected Logout Response")
+        };
+        assert_eq!(r.response, 0x00);
+        assert_eq!(c.stage(), Stage::Closing);
     }
 }

@@ -26,6 +26,11 @@ impl TargetRegistry {
     pub fn get(&self, iqn: &str) -> Option<Arc<ScsiTarget>> {
         self.targets.get(iqn).cloned()
     }
+
+    /// All registered target IQNs (used by SendTargets text negotiation).
+    pub fn iqns(&self) -> Vec<String> {
+        self.targets.keys().cloned().collect()
+    }
 }
 
 #[cfg(test)]
