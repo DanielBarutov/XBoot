@@ -1,4 +1,5 @@
 pub mod dhcp;
+pub mod http;
 pub mod tftp;
 
 use std::io;
