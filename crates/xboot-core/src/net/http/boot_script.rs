@@ -3,9 +3,7 @@
 
 /// Generate an iPXE script that sanboots from the given iSCSI target.
 pub fn generate(iqn: &str, server_ip: &str) -> String {
-    format!(
-        "#!ipxe\nset initiator-iqn {iqn}\nsanboot iscsi:{server_ip}::::{iqn}\n"
-    )
+    format!("#!ipxe\nset initiator-iqn {iqn}\nsanboot iscsi:{server_ip}::::{iqn}\n")
 }
 
 #[cfg(test)]
@@ -17,23 +15,16 @@ mod tests {
         let script = generate("iqn.2026-06.dev.xboot:pc-01", "192.168.1.10");
         assert!(script.contains("#!ipxe"));
         assert!(script.contains("set initiator-iqn iqn.2026-06.dev.xboot:pc-01"));
-        assert!(script.contains(
-            "sanboot iscsi:192.168.1.10::::iqn.2026-06.dev.xboot:pc-01"
-        ));
+        assert!(script.contains("sanboot iscsi:192.168.1.10::::iqn.2026-06.dev.xboot:pc-01"));
     }
 
     #[test]
     fn generates_script_with_mac_iqn() {
-        let script = generate(
-            "iqn.2026-06.dev.xboot:aa-bb-cc-dd-ee-01",
-            "10.0.0.1",
+        let script = generate("iqn.2026-06.dev.xboot:aa-bb-cc-dd-ee-01", "10.0.0.1");
+        assert!(script.contains("set initiator-iqn iqn.2026-06.dev.xboot:aa-bb-cc-dd-ee-01"));
+        assert!(
+            script.contains("sanboot iscsi:10.0.0.1::::iqn.2026-06.dev.xboot:aa-bb-cc-dd-ee-01")
         );
-        assert!(script.contains(
-            "set initiator-iqn iqn.2026-06.dev.xboot:aa-bb-cc-dd-ee-01"
-        ));
-        assert!(script.contains(
-            "sanboot iscsi:10.0.0.1::::iqn.2026-06.dev.xboot:aa-bb-cc-dd-ee-01"
-        ));
     }
 
     #[test]

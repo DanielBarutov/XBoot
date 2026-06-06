@@ -113,8 +113,8 @@ impl ClientManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{BootConfig, Client, ClientDefaults, Config, Disk, DiskType};
     use crate::config::ByteSize;
+    use crate::config::{BootConfig, Client, ClientDefaults, Config, Disk, DiskType};
     use std::net::{IpAddr, Ipv4Addr};
 
     fn test_boot() -> BootConfig {
@@ -171,7 +171,7 @@ mod tests {
     }
 
     fn make_raw(path: &std::path::Path, size: usize) {
-        std::fs::write(path, &vec![0u8; size]).unwrap();
+        std::fs::write(path, vec![0u8; size]).unwrap();
     }
 
     #[test]
@@ -250,7 +250,7 @@ mod tests {
     fn get_store_returns_cached_backing() {
         let tmp = tempfile::tempdir().unwrap();
         let img = tmp.path().join("img.raw");
-        std::fs::write(&img, &[0xABu8; 4096]).unwrap();
+        std::fs::write(&img, [0xABu8; 4096]).unwrap();
 
         let cfg = cfg_with_clients(
             &img.display().to_string(),
@@ -284,7 +284,7 @@ mod tests {
     fn arcstore_delegates_to_inner() {
         let tmp = tempfile::tempdir().unwrap();
         let img = tmp.path().join("arc.raw");
-        std::fs::write(&img, &[0xCDu8; 512]).unwrap();
+        std::fs::write(&img, [0xCDu8; 512]).unwrap();
 
         let store: Arc<dyn BackingStore> = Arc::from(crate::storage::open_backing(&img).unwrap());
         let wrapper = ArcStore(store);

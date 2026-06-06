@@ -1827,6 +1827,7 @@ dependencies = [
  "bytes",
  "http-body-util",
  "hyper",
+ "hyper-util",
  "lru",
  "proptest",
  "reqwest",

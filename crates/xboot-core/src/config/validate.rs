@@ -497,7 +497,9 @@ http_script_url = "http://192.168.1.10/boot.ipxe"
             tmp.path().display()
         ));
         let errs = validate(&cfg).unwrap_err().0;
-        assert!(errs.iter().any(|e| matches!(e, ValidationError::HttpPortZero)));
+        assert!(errs
+            .iter()
+            .any(|e| matches!(e, ValidationError::HttpPortZero)));
     }
 
     #[test]

@@ -44,9 +44,8 @@ pub async fn serve(
         let registry = registry.clone();
 
         tokio::spawn(async move {
-            let svc = service_fn(move |req| {
-                handle(req, cfg.clone(), manager.clone(), registry.clone())
-            });
+            let svc =
+                service_fn(move |req| handle(req, cfg.clone(), manager.clone(), registry.clone()));
             if let Err(e) = http1::Builder::new()
                 .serve_connection(TokioIo::new(stream), svc)
                 .await
@@ -88,10 +87,7 @@ async fn handle(
         None => return Ok(not_found()),
     };
 
-    let boot = cfg
-        .boot
-        .as_ref()
-        .expect("boot section must be present");
+    let boot = cfg.boot.as_ref().expect("boot section must be present");
     let iqn = client_iqn(&client);
 
     // Build ScsiTarget: LUN 0 = system, LUN 1.. = games.
@@ -145,9 +141,7 @@ fn decode_percent(s: &str) -> String {
     let mut i = 0;
     while i < bytes.len() {
         if bytes[i] == b'%' && i + 2 < bytes.len() {
-            if let (Some(hi), Some(lo)) =
-                (hex_val(bytes[i + 1]), hex_val(bytes[i + 2]))
-            {
+            if let (Some(hi), Some(lo)) = (hex_val(bytes[i + 1]), hex_val(bytes[i + 2])) {
                 out.push((hi << 4 | lo) as char);
                 i += 3;
                 continue;
@@ -191,8 +185,8 @@ mod tests {
     fn test_cfg(tmp_dir: &std::path::Path) -> Config {
         let img = tmp_dir.join("img.raw");
         let game = tmp_dir.join("game.raw");
-        std::fs::write(&img, &vec![0u8; 4096]).unwrap();
-        std::fs::write(&game, &vec![0u8; 4096]).unwrap();
+        std::fs::write(&img, vec![0u8; 4096]).unwrap();
+        std::fs::write(&game, vec![0u8; 4096]).unwrap();
 
         Config {
             disks: vec![
@@ -283,10 +277,7 @@ mod tests {
         let registry = Arc::new(Mutex::new(TargetRegistry::new()));
         let addr = start_server(cfg, manager.clone(), registry.clone()).await;
 
-        let url = format!(
-            "http://{}/boot.ipxe?mac=aa:bb:cc:dd:ee:01",
-            addr
-        );
+        let url = format!("http://{}/boot.ipxe?mac=aa:bb:cc:dd:ee:01", addr);
         let resp = reqwest::get(&url).await.unwrap();
         assert_eq!(resp.status(), 200);
         let body = resp.text().await.unwrap();
@@ -316,10 +307,7 @@ mod tests {
         let registry = Arc::new(Mutex::new(TargetRegistry::new()));
         let addr = start_server(cfg, manager, registry).await;
 
-        let url = format!(
-            "http://{}/boot.ipxe?mac=ff:ff:ff:ff:ff:ff",
-            addr
-        );
+        let url = format!("http://{}/boot.ipxe?mac=ff:ff:ff:ff:ff:ff", addr);
         let resp = reqwest::get(&url).await.unwrap();
         assert_eq!(resp.status(), 404);
     }
@@ -359,10 +347,7 @@ mod tests {
         let registry = Arc::new(Mutex::new(TargetRegistry::new()));
         let addr = start_server(cfg, manager.clone(), registry.clone()).await;
 
-        let url = format!(
-            "http://{}/boot.ipxe?mac=aa:bb:cc:dd:ee:01",
-            addr
-        );
+        let url = format!("http://{}/boot.ipxe?mac=aa:bb:cc:dd:ee:01", addr);
         let resp = reqwest::get(&url).await.unwrap();
         assert_eq!(resp.status(), 200);
 
@@ -423,9 +408,6 @@ mod tests {
             game_disk_ids: vec![],
             writeback_disk_id: "wb".into(),
         };
-        assert_eq!(
-            client_iqn(&c),
-            "iqn.2026-06.dev.xboot:aa-bb-cc-dd-ee-01"
-        );
+        assert_eq!(client_iqn(&c), "iqn.2026-06.dev.xboot:aa-bb-cc-dd-ee-01");
     }
 }
