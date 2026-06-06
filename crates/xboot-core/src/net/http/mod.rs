@@ -14,8 +14,9 @@ use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Method, Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
+use std::sync::RwLock;
 use tokio::net::TcpListener;
-use tokio::sync::Mutex;
+use tokio_util::sync::CancellationToken;
 
 use crate::config::Config;
 use crate::iscsi::registry::TargetRegistry;
@@ -28,7 +29,8 @@ use crate::volume::{RamOverlay, Volume};
 pub async fn serve(
     cfg: Arc<Config>,
     manager: Arc<ClientManager>,
-    registry: Arc<Mutex<TargetRegistry>>,
+    registry: Arc<RwLock<TargetRegistry>>,
+    token: CancellationToken,
 ) -> std::io::Result<()> {
     let boot = cfg
         .boot
@@ -38,21 +40,29 @@ pub async fn serve(
     let listener = TcpListener::bind(addr).await?;
 
     loop {
-        let (stream, _peer) = listener.accept().await?;
-        let cfg = cfg.clone();
-        let manager = manager.clone();
-        let registry = registry.clone();
+        tokio::select! {
+            result = listener.accept() => {
+                let (stream, _peer) = result?;
+                let cfg = cfg.clone();
+                let manager = manager.clone();
+                let registry = registry.clone();
 
-        tokio::spawn(async move {
-            let svc =
-                service_fn(move |req| handle(req, cfg.clone(), manager.clone(), registry.clone()));
-            if let Err(e) = http1::Builder::new()
-                .serve_connection(TokioIo::new(stream), svc)
-                .await
-            {
-                eprintln!("http: connection error: {e}");
+                tokio::spawn(async move {
+                    let svc =
+                        service_fn(move |req| handle(req, cfg.clone(), manager.clone(), registry.clone()));
+                    if let Err(e) = http1::Builder::new()
+                        .serve_connection(TokioIo::new(stream), svc)
+                        .await
+                    {
+                        eprintln!("http: connection error: {e}");
+                    }
+                });
             }
-        });
+            _ = token.cancelled() => {
+                tracing::info!("http: shutting down");
+                return Ok(());
+            }
+        }
     }
 }
 
@@ -67,7 +77,7 @@ async fn handle(
     req: Request<Incoming>,
     cfg: Arc<Config>,
     manager: Arc<ClientManager>,
-    registry: Arc<Mutex<TargetRegistry>>,
+    registry: Arc<RwLock<TargetRegistry>>,
 ) -> Result<Response<Full<Bytes>>, hyper::Error> {
     // Only GET /boot.ipxe
     if req.method() != Method::GET || req.uri().path() != "/boot.ipxe" {
@@ -109,8 +119,7 @@ async fn handle(
 
     // Register in the iSCSI registry.
     {
-        let mut reg = registry.lock().await;
-        reg.insert(&iqn, target);
+        registry.write().unwrap().insert(&iqn, target);
     }
 
     // Generate the boot script.
@@ -241,7 +250,7 @@ mod tests {
     async fn start_server(
         cfg: Config,
         manager: Arc<ClientManager>,
-        registry: Arc<Mutex<TargetRegistry>>,
+        registry: Arc<RwLock<TargetRegistry>>,
     ) -> SocketAddr {
         let cfg = Arc::new(cfg);
         let boot = cfg.boot.as_ref().unwrap();
@@ -275,7 +284,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let cfg = test_cfg(tmp.path());
         let manager = Arc::new(ClientManager::new(&cfg).unwrap());
-        let registry = Arc::new(Mutex::new(TargetRegistry::new()));
+        let registry = Arc::new(RwLock::new(TargetRegistry::new()));
         let addr = start_server(cfg, manager.clone(), registry.clone()).await;
 
         let url = format!("http://{}/boot.ipxe?mac=aa:bb:cc:dd:ee:01", addr);
@@ -292,7 +301,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let cfg = test_cfg(tmp.path());
         let manager = Arc::new(ClientManager::new(&cfg).unwrap());
-        let registry = Arc::new(Mutex::new(TargetRegistry::new()));
+        let registry = Arc::new(RwLock::new(TargetRegistry::new()));
         let addr = start_server(cfg, manager, registry).await;
 
         let url = format!("http://{}/boot.ipxe", addr);
@@ -305,7 +314,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let cfg = test_cfg(tmp.path());
         let manager = Arc::new(ClientManager::new(&cfg).unwrap());
-        let registry = Arc::new(Mutex::new(TargetRegistry::new()));
+        let registry = Arc::new(RwLock::new(TargetRegistry::new()));
         let addr = start_server(cfg, manager, registry).await;
 
         let url = format!("http://{}/boot.ipxe?mac=ff:ff:ff:ff:ff:ff", addr);
@@ -318,7 +327,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let cfg = test_cfg(tmp.path());
         let manager = Arc::new(ClientManager::new(&cfg).unwrap());
-        let registry = Arc::new(Mutex::new(TargetRegistry::new()));
+        let registry = Arc::new(RwLock::new(TargetRegistry::new()));
         let addr = start_server(cfg, manager, registry).await;
 
         let url = format!("http://{}/other", addr);
@@ -331,7 +340,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let cfg = test_cfg(tmp.path());
         let manager = Arc::new(ClientManager::new(&cfg).unwrap());
-        let registry = Arc::new(Mutex::new(TargetRegistry::new()));
+        let registry = Arc::new(RwLock::new(TargetRegistry::new()));
         let addr = start_server(cfg, manager, registry).await;
 
         let client = reqwest::Client::new();
@@ -345,7 +354,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let cfg = test_cfg(tmp.path());
         let manager = Arc::new(ClientManager::new(&cfg).unwrap());
-        let registry = Arc::new(Mutex::new(TargetRegistry::new()));
+        let registry = Arc::new(RwLock::new(TargetRegistry::new()));
         let addr = start_server(cfg, manager.clone(), registry.clone()).await;
 
         let url = format!("http://{}/boot.ipxe?mac=aa:bb:cc:dd:ee:01", addr);
@@ -353,8 +362,11 @@ mod tests {
         assert_eq!(resp.status(), 200);
 
         // Verify the target was registered.
-        let reg = registry.lock().await;
-        assert!(reg.get("iqn.2026-06.dev.xboot:pc-01").is_some());
+        assert!(registry
+            .read()
+            .unwrap()
+            .get("iqn.2026-06.dev.xboot:pc-01")
+            .is_some());
     }
 
     #[test]
