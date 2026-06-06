@@ -93,13 +93,10 @@ fn handle_datagram(data: &[u8], cfg: &BootConfig, is_port67: bool, from: SocketA
         let plan = decide::plan(&req, cfg)?;
         let vendor = options::pxe_offer_vendor_opts(cfg.server_ip);
 
-        let reply = if is_pxe {
-            // ProxyDHCP: no IP, only PXE boot info
-            build_reply(&req, &plan, cfg, msg_type::OFFER, vendor, Role::ProxyDhcp)
-        } else {
-            // Regular DHCP: IP, gateway, DNS (no boot info)
-            build_reply(&req, &plan, cfg, msg_type::OFFER, vendor, Role::Dhcp)
-        };
+        // Always respond with IP + full DHCP options
+        // For PXE clients, also add boot information
+        let role = if is_pxe { Role::ProxyDhcp } else { Role::Dhcp };
+        let reply = build_reply(&req, &plan, cfg, msg_type::OFFER, vendor, role);
 
         let dest = reply_dest(&req, from);
         Some((reply, dest))
@@ -165,8 +162,8 @@ pub(crate) fn build_reply(
         data: vendor43,
     });
 
-    // Standard DHCP options only for regular DHCP role
-    if role == Role::Dhcp {
+    // Standard DHCP options for DHCP and proxyDHCP (not for BootServer)
+    if role != Role::BootServer {
         opts.push(DhcpOption {
             code: 1, // Subnet Mask
             data: Ipv4Addr::new(255, 255, 255, 0).octets().to_vec(),
@@ -195,8 +192,8 @@ pub(crate) fn build_reply(
         flags: req.flags,
         ciaddr: Ipv4Addr::UNSPECIFIED,
         yiaddr: match role {
-            Role::Dhcp => plan.yiaddr,           // Assign IP for DHCP
-            _ => Ipv4Addr::UNSPECIFIED,          // No IP for proxyDHCP/BootServer
+            Role::BootServer => Ipv4Addr::UNSPECIFIED,  // No IP for BootServer
+            _ => plan.yiaddr,                            // Always assign IP for DHCP/proxyDHCP
         },
         siaddr: plan.next_server.unwrap_or(Ipv4Addr::UNSPECIFIED),
         giaddr: req.giaddr,
@@ -275,7 +272,7 @@ mod tests {
     }
 
     #[test]
-    fn proxy_dhcp_has_no_ip_no_server_id() {
+    fn proxy_dhcp_has_ip_boot_info_no_server_id() {
         let cfg = test_cfg();
         let req = packet::parse(&discover(Some([0x00, 0x00]))).unwrap();
         let plan = crate::net::dhcp::decide::plan(&req, &cfg).unwrap();
@@ -287,12 +284,15 @@ mod tests {
             options::pxe_offer_vendor_opts(cfg.server_ip),
             Role::ProxyDhcp,
         );
-        assert_eq!(reply.yiaddr, Ipv4Addr::UNSPECIFIED); // no IP in proxyDHCP
-        assert_eq!(reply.option(options::SERVER_ID), None); // no Server ID
+        assert_ne!(reply.yiaddr, Ipv4Addr::UNSPECIFIED); // proxyDHCP also assigns IP
+        assert_eq!(reply.option(options::SERVER_ID), None); // no Server ID (identifies as proxyDHCP)
         assert_eq!(
             reply.option(options::BOOTFILE_NAME),
             Some(b"undionly.kpxe".as_ref())
-        ); // but has boot file
+        ); // has boot file
+        // Should also have DHCP options
+        assert_eq!(reply.option(1), Some([255, 255, 255, 0].as_ref())); // Subnet Mask
+        assert_eq!(reply.option(3), Some([192, 168, 1, 10].as_ref())); // Gateway
     }
 
     #[test]
