@@ -123,6 +123,7 @@ mod tests {
             bind: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
             http_bind: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
             http_port: 80,
+            iscsi_port: 3260,
             tftp_root: "/tmp".into(),
             bios_filename: "undionly.kpxe".into(),
             uefi_filename: "ipxe.efi".into(),

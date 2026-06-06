@@ -228,6 +228,7 @@ mod tests {
                 bind: IpAddr::V4(Ipv4Addr::LOCALHOST),
                 http_bind: IpAddr::V4(Ipv4Addr::LOCALHOST),
                 http_port: 0, // OS picks a free port
+                iscsi_port: 3260,
                 tftp_root: "/tmp".into(),
                 bios_filename: "undionly.kpxe".into(),
                 uefi_filename: "ipxe.efi".into(),

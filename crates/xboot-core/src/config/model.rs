@@ -66,6 +66,10 @@ fn default_http_port() -> u16 {
     80
 }
 
+fn default_iscsi_port() -> u16 {
+    3260
+}
+
 /// Optional `[boot]` section: enables the proxyDHCP / PXE network-boot service.
 /// When absent, the DHCP server is not started.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -80,6 +84,9 @@ pub struct BootConfig {
     /// Port for the HTTP boot-script server (phase 06c).
     #[serde(default = "default_http_port")]
     pub http_port: u16,
+    /// Port for the iSCSI target (phase 07). Default: 3260.
+    #[serde(default = "default_iscsi_port")]
+    pub iscsi_port: u16,
     /// Directory from which TFTP files are served (phase 06b).
     pub tftp_root: PathBuf,
     /// TFTP file for legacy BIOS (arch 0x0000), relative to tftp_root.
@@ -179,6 +186,7 @@ http_script_url = "http://192.168.1.10/boot.ipxe"
         assert_eq!(boot.bind, IpAddr::V4(Ipv4Addr::UNSPECIFIED));
         assert_eq!(boot.http_bind, IpAddr::V4(Ipv4Addr::UNSPECIFIED));
         assert_eq!(boot.http_port, 80);
+        assert_eq!(boot.iscsi_port, 3260);
         assert_eq!(boot.tftp_root, PathBuf::from("/srv/xboot/tftp"));
         assert_eq!(boot.bios_filename, "undionly.kpxe");
         assert_eq!(boot.uefi_filename, "ipxe.efi");
@@ -204,6 +212,25 @@ http_script_url = "http://192.168.1.10/boot.ipxe"
         let boot = cfg.boot.unwrap();
         assert_eq!(boot.http_bind, IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)));
         assert_eq!(boot.http_port, 8080);
+        assert_eq!(boot.iscsi_port, 3260);
+    }
+
+    #[test]
+    fn parses_custom_iscsi_port() {
+        let cfg: Config = toml::from_str(
+            r#"
+[boot]
+server_ip       = "192.168.1.10"
+bind            = "0.0.0.0"
+iscsi_port      = 4321
+tftp_root       = "/srv/xboot/tftp"
+bios_filename   = "undionly.kpxe"
+uefi_filename   = "ipxe.efi"
+http_script_url = "http://192.168.1.10/boot.ipxe"
+"#,
+        )
+        .unwrap();
+        assert_eq!(cfg.boot.unwrap().iscsi_port, 4321);
     }
 
     #[test]
