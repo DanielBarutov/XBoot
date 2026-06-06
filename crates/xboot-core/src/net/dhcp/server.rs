@@ -132,13 +132,15 @@ pub(crate) fn build_reply(
             code: options::MSG_TYPE,
             data: vec![mtype],
         },
-        DhcpOption {
+    ];
+    // Server ID only for BootService (port 4011), not for proxy (port 67)
+    if role == Role::BootService {
+        opts.push(DhcpOption {
             code: options::SERVER_ID,
-            data: match role {
-                Role::Proxy => Ipv4Addr::BROADCAST.octets().to_vec(),
-                Role::BootService => cfg.server_ip.octets().to_vec(),
-            },
-        },
+            data: cfg.server_ip.octets().to_vec(),
+        });
+    }
+    opts.extend(vec![
         DhcpOption {
             code: options::VENDOR_CLASS_ID,
             data: b"PXEClient".to_vec(),
@@ -147,7 +149,7 @@ pub(crate) fn build_reply(
             code: options::BOOTFILE_NAME,
             data: plan.bootfile.clone().into_bytes(),
         },
-    ];
+    ]);
     if let Some(ns) = plan.next_server {
         // Option 66 as the ASCII dotted IP (dnsmasq-compatible) + siaddr below.
         opts.push(DhcpOption {
@@ -277,10 +279,7 @@ mod tests {
         assert_eq!(reply.xid, 0x1234); // echoed
         assert_eq!(reply.siaddr, Ipv4Addr::new(192, 168, 1, 10));
         assert_eq!(reply.message_type(), Some(msg_type::OFFER));
-        assert_eq!(
-            reply.option(options::SERVER_ID),
-            Some([255, 255, 255, 255].as_ref())
-        ); // broadcast for proxyDHCP
+        assert_eq!(reply.option(options::SERVER_ID), None); // no Server ID in proxy OFFER
         assert_eq!(
             reply.option(options::VENDOR_CLASS_ID),
             Some(b"PXEClient".as_ref())
