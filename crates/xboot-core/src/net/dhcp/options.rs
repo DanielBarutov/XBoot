@@ -69,8 +69,9 @@ impl DhcpMessage {
 /// boot-server entry pointing the client at our `:4011` service.
 pub fn pxe_offer_vendor_opts(server_ip: Ipv4Addr) -> Vec<u8> {
     let mut v = Vec::new();
-    // PXE_DISCOVERY_CONTROL = disable broadcast + multicast, use boot-server list only.
-    v.extend_from_slice(&[pxe::DISCOVERY_CONTROL, 1, 0x07]);
+    // PXE_DISCOVERY_CONTROL = disable broadcast + multicast, use boot-server list,
+    // and disable the PXE prompt/menu so the client boots straight away.
+    v.extend_from_slice(&[pxe::DISCOVERY_CONTROL, 1, 0x0F]);
     // PXE_BOOT_SERVERS: one entry — server type 0x0000, IP count 1, our IP.
     let mut bs = Vec::new();
     bs.extend_from_slice(&[0x00, 0x00]); // boot server type
@@ -157,7 +158,7 @@ mod tests {
     fn pxe_offer_vendor_opts_layout() {
         let v = pxe_offer_vendor_opts(Ipv4Addr::new(192, 168, 1, 10));
         // sub-opt 6 (discovery control), len 1, value 0x07
-        assert_eq!(&v[0..3], &[pxe::DISCOVERY_CONTROL, 1, 0x07]);
+        assert_eq!(&v[0..3], &[pxe::DISCOVERY_CONTROL, 1, 0x0F]);
         // sub-opt 8 (boot servers), len 7, type 0x0000, count 1, IP
         assert_eq!(v[3], pxe::BOOT_SERVERS);
         assert_eq!(v[4], 7);
