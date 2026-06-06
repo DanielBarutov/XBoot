@@ -28,6 +28,8 @@ pub enum ValidationError {
     InvalidMac(String),
     #[error("duplicate client MAC address: {0}")]
     DuplicateMac(String),
+    #[error("boot.http_port must not be zero")]
+    HttpPortZero,
     #[error("boot.http_script_url must start with http:// or https://: {0}")]
     InvalidHttpUrl(String),
     #[error("boot.{field} must not be empty")]
@@ -106,6 +108,10 @@ fn check_profile(
 }
 
 fn check_boot(errors: &mut Vec<ValidationError>, boot: &crate::config::BootConfig) {
+    if boot.http_port == 0 {
+        errors.push(ValidationError::HttpPortZero);
+    }
+
     // Validate tftp_root is a directory
     if !boot.tftp_root.is_dir() {
         errors.push(ValidationError::TftpRootNotDirectory(
@@ -472,6 +478,26 @@ http_script_url = "http://192.168.1.10/boot.ipxe"
         assert!(errs.iter().any(
             |e| matches!(e, ValidationError::EmptyBootField { field } if field == "bios_filename")
         ));
+    }
+
+    #[test]
+    fn rejects_zero_http_port() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cfg = parse(&format!(
+            r#"
+[boot]
+server_ip       = "192.168.1.10"
+bind            = "0.0.0.0"
+http_port       = 0
+tftp_root       = "{}"
+bios_filename   = "undionly.kpxe"
+uefi_filename   = "ipxe.efi"
+http_script_url = "http://192.168.1.10/boot.ipxe"
+"#,
+            tmp.path().display()
+        ));
+        let errs = validate(&cfg).unwrap_err().0;
+        assert!(errs.iter().any(|e| matches!(e, ValidationError::HttpPortZero)));
     }
 
     #[test]
