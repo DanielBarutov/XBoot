@@ -100,7 +100,7 @@ fn handle_datagram(
         ),
         Role::BootService => (msg_type::ACK, options::pxe_ack_vendor_opts()),
     };
-    let reply = build_reply(&req, &plan, cfg, mtype, vendor, role);
+    let reply = build_reply(&req, &plan, cfg, mtype, vendor, role, role == Role::BootService);
     Some((reply, reply_dest(&req, role, from)))
 }
 
@@ -126,6 +126,7 @@ pub(crate) fn build_reply(
     mtype: u8,
     vendor43: Vec<u8>,
     role: Role,
+    include_bootfile: bool,
 ) -> DhcpMessage {
     let mut opts = vec![
         DhcpOption {
@@ -140,23 +141,26 @@ pub(crate) fn build_reply(
             data: cfg.server_ip.octets().to_vec(),
         });
     }
-    opts.extend(vec![
-        DhcpOption {
-            code: options::VENDOR_CLASS_ID,
-            data: b"PXEClient".to_vec(),
-        },
-        DhcpOption {
+    opts.push(DhcpOption {
+        code: options::VENDOR_CLASS_ID,
+        data: b"PXEClient".to_vec(),
+    });
+
+    // Include boot file and TFTP server only for BootService (port 4011)
+    // Not for Proxy (port 67) — we want client to contact port 4011 for boot info
+    if include_bootfile {
+        opts.push(DhcpOption {
             code: options::BOOTFILE_NAME,
             data: plan.bootfile.clone().into_bytes(),
-        },
-    ]);
-    if let Some(ns) = plan.next_server {
-        // Option 66 as the ASCII dotted IP (dnsmasq-compatible) + siaddr below.
-        opts.push(DhcpOption {
-            code: options::TFTP_SERVER_NAME,
-            data: ns.to_string().into_bytes(),
         });
+        if let Some(ns) = plan.next_server {
+            opts.push(DhcpOption {
+                code: options::TFTP_SERVER_NAME,
+                data: ns.to_string().into_bytes(),
+            });
+        }
     }
+
     opts.push(DhcpOption {
         code: options::VENDOR_SPECIFIC,
         data: vendor43,
@@ -291,6 +295,7 @@ mod tests {
             msg_type::OFFER,
             options::pxe_offer_vendor_opts(cfg.server_ip),
             Role::Proxy,
+            false, // no bootfile in proxy reply
         );
         assert_eq!(reply.op, BOOTREPLY);
         assert_ne!(reply.yiaddr, Ipv4Addr::UNSPECIFIED); // assign an IP
@@ -301,18 +306,14 @@ mod tests {
         // Check standard DHCP options
         assert_eq!(reply.option(1), Some([255, 255, 255, 0].as_ref())); // Subnet Mask
         assert_eq!(reply.option(3), Some([192, 168, 1, 10].as_ref())); // Default Gateway
+        // No bootfile in proxy OFFER — sent only in BootService ACK on port 4011
+        assert_eq!(reply.option(options::BOOTFILE_NAME), None);
         assert_eq!(
             reply.option(options::VENDOR_CLASS_ID),
             Some(b"PXEClient".as_ref())
         );
-        assert_eq!(
-            reply.option(options::BOOTFILE_NAME),
-            Some(b"undionly.kpxe".as_ref())
-        );
-        assert_eq!(
-            reply.option(options::TFTP_SERVER_NAME),
-            Some(b"192.168.1.10".as_ref())
-        );
+        // No TFTP server in proxy OFFER either — client must contact port 4011
+        assert_eq!(reply.option(options::TFTP_SERVER_NAME), None);
         assert!(reply.option(options::VENDOR_SPECIFIC).is_some());
     }
 
@@ -336,28 +337,22 @@ mod tests {
 
         let client = UdpSocket::bind("127.0.0.1:0").await.unwrap();
 
-        // Stage 1: firmware DISCOVER (BIOS) → iPXE binary over TFTP.
+        // Stage 1: firmware DISCOVER (BIOS) — no bootfile yet (sent only on port 4011 ACK).
         client
             .send_to(&discover(Some([0x00, 0x00]), false), addr)
             .await
             .unwrap();
         let r1 = recv_reply(&client).await;
-        assert_eq!(
-            r1.option(options::BOOTFILE_NAME),
-            Some(b"undionly.kpxe".as_ref())
-        );
-        assert_eq!(r1.siaddr, Ipv4Addr::new(192, 168, 1, 10));
+        assert_eq!(r1.option(options::BOOTFILE_NAME), None); // bootfile on port 4011 only
+        assert_eq!(r1.siaddr, Ipv4Addr::new(192, 168, 1, 10)); // still has next-server
 
-        // Stage 2: iPXE re-DISCOVER → HTTP boot script (loop broken).
+        // Stage 2: iPXE re-DISCOVER — no bootfile yet (sent only on port 4011 ACK).
         client
             .send_to(&discover(Some([0x00, 0x07]), true), addr)
             .await
             .unwrap();
         let r2 = recv_reply(&client).await;
-        assert_eq!(
-            r2.option(options::BOOTFILE_NAME),
-            Some(b"http://192.168.1.10/boot.ipxe?mac=aa:bb:cc:dd:ee:01".as_ref())
-        );
+        assert_eq!(r2.option(options::BOOTFILE_NAME), None); // bootfile on port 4011 only
         assert_eq!(r2.siaddr, Ipv4Addr::UNSPECIFIED); // no next-server on the HTTP arm
     }
 
