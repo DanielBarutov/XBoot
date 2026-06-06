@@ -100,7 +100,7 @@ fn handle_datagram(
         ),
         Role::BootService => (msg_type::ACK, options::pxe_ack_vendor_opts()),
     };
-    let reply = build_reply(&req, &plan, cfg, mtype, vendor);
+    let reply = build_reply(&req, &plan, cfg, mtype, vendor, role);
     Some((reply, reply_dest(&req, role, from)))
 }
 
@@ -125,6 +125,7 @@ pub(crate) fn build_reply(
     cfg: &BootConfig,
     mtype: u8,
     vendor43: Vec<u8>,
+    role: Role,
 ) -> DhcpMessage {
     let mut opts = vec![
         DhcpOption {
@@ -133,7 +134,10 @@ pub(crate) fn build_reply(
         },
         DhcpOption {
             code: options::SERVER_ID,
-            data: cfg.server_ip.octets().to_vec(),
+            data: match role {
+                Role::Proxy => Ipv4Addr::BROADCAST.octets().to_vec(),
+                Role::BootService => cfg.server_ip.octets().to_vec(),
+            },
         },
         DhcpOption {
             code: options::VENDOR_CLASS_ID,
@@ -266,6 +270,7 @@ mod tests {
             &cfg,
             msg_type::OFFER,
             options::pxe_offer_vendor_opts(cfg.server_ip),
+            Role::Proxy,
         );
         assert_eq!(reply.op, BOOTREPLY);
         assert_eq!(reply.yiaddr, Ipv4Addr::UNSPECIFIED); // never assign an IP
@@ -274,8 +279,8 @@ mod tests {
         assert_eq!(reply.message_type(), Some(msg_type::OFFER));
         assert_eq!(
             reply.option(options::SERVER_ID),
-            Some([192, 168, 1, 10].as_ref())
-        );
+            Some([255, 255, 255, 255].as_ref())
+        ); // broadcast for proxyDHCP
         assert_eq!(
             reply.option(options::VENDOR_CLASS_ID),
             Some(b"PXEClient".as_ref())
