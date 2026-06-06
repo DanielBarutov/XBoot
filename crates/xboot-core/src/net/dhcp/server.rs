@@ -162,6 +162,24 @@ pub(crate) fn build_reply(
         data: vendor43,
     });
 
+    // Add standard DHCP options for full DHCP server (not just proxy)
+    opts.push(DhcpOption {
+        code: 1, // Subnet Mask
+        data: Ipv4Addr::new(255, 255, 255, 0).octets().to_vec(),
+    });
+    opts.push(DhcpOption {
+        code: 3, // Default Gateway (router IP)
+        data: cfg.server_ip.octets().to_vec(),
+    });
+    opts.push(DhcpOption {
+        code: 6, // Domain Name Servers
+        data: cfg.server_ip.octets().to_vec(),
+    });
+    opts.push(DhcpOption {
+        code: 51, // IP Address Lease Time (3600 seconds = 1 hour)
+        data: 3600u32.to_be_bytes().to_vec(),
+    });
+
     DhcpMessage {
         op: BOOTREPLY,
         htype: req.htype,
@@ -171,7 +189,7 @@ pub(crate) fn build_reply(
         secs: 0,
         flags: req.flags,
         ciaddr: Ipv4Addr::UNSPECIFIED,
-        yiaddr: Ipv4Addr::UNSPECIFIED,
+        yiaddr: plan.yiaddr,
         siaddr: plan.next_server.unwrap_or(Ipv4Addr::UNSPECIFIED),
         giaddr: req.giaddr,
         chaddr: req.chaddr,
@@ -275,11 +293,14 @@ mod tests {
             Role::Proxy,
         );
         assert_eq!(reply.op, BOOTREPLY);
-        assert_eq!(reply.yiaddr, Ipv4Addr::UNSPECIFIED); // never assign an IP
+        assert_ne!(reply.yiaddr, Ipv4Addr::UNSPECIFIED); // assign an IP
         assert_eq!(reply.xid, 0x1234); // echoed
         assert_eq!(reply.siaddr, Ipv4Addr::new(192, 168, 1, 10));
         assert_eq!(reply.message_type(), Some(msg_type::OFFER));
         assert_eq!(reply.option(options::SERVER_ID), None); // no Server ID in proxy OFFER
+        // Check standard DHCP options
+        assert_eq!(reply.option(1), Some([255, 255, 255, 0].as_ref())); // Subnet Mask
+        assert_eq!(reply.option(3), Some([192, 168, 1, 10].as_ref())); // Default Gateway
         assert_eq!(
             reply.option(options::VENDOR_CLASS_ID),
             Some(b"PXEClient".as_ref())

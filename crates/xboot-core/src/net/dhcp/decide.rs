@@ -11,16 +11,20 @@ pub const ARCH_BIOS_X86: u16 = 0x0000;
 pub const ARCH_UEFI_X64: u16 = 0x0007;
 pub const ARCH_UEFI_X64_ALT: u16 = 0x0009;
 
-/// What to put in the reply: the bootfile (option 67) and, on the firmware arm,
-/// the next-server IP (siaddr / option 66). `None` next-server = iPXE HTTP arm.
+/// What to put in the reply: the bootfile (option 67), next-server IP (siaddr / option 66),
+/// and assigned IP (yiaddr) for the client.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OfferPlan {
     pub bootfile: String,
     pub next_server: Option<Ipv4Addr>,
+    pub yiaddr: Ipv4Addr,
 }
 
 /// Decide the boot plan for a request. `None` means "stay silent".
 pub fn plan(msg: &DhcpMessage, cfg: &BootConfig) -> Option<OfferPlan> {
+    // Assign IP based on MAC address (deterministic pool: last byte of MAC → 192.168.0.MAC_LAST_BYTE)
+    let yiaddr = assign_ip_from_mac(&msg.chaddr[..(msg.hlen as usize).min(16)], cfg.server_ip)?;
+
     // iPXE arm — option 77 user class contains "iPXE". Breaks the chainload loop
     // by handing iPXE the HTTP script instead of the iPXE binary again.
     if is_ipxe(msg) {
@@ -28,6 +32,7 @@ pub fn plan(msg: &DhcpMessage, cfg: &BootConfig) -> Option<OfferPlan> {
         return Some(OfferPlan {
             bootfile: format!("{}?mac={}", cfg.http_script_url, mac),
             next_server: None,
+            yiaddr,
         });
     }
 
@@ -36,13 +41,35 @@ pub fn plan(msg: &DhcpMessage, cfg: &BootConfig) -> Option<OfferPlan> {
         ARCH_BIOS_X86 => Some(OfferPlan {
             bootfile: cfg.bios_filename.clone(),
             next_server: Some(cfg.server_ip),
+            yiaddr,
         }),
         ARCH_UEFI_X64 | ARCH_UEFI_X64_ALT => Some(OfferPlan {
             bootfile: cfg.uefi_filename.clone(),
             next_server: Some(cfg.server_ip),
+            yiaddr,
         }),
         _ => None,
     }
+}
+
+/// Assign IP address based on MAC address. Uses the last byte of the MAC address
+/// as the host part (e.g., MAC ending in :68 → 192.168.0.68 for server at 192.168.0.1).
+fn assign_ip_from_mac(mac_bytes: &[u8], server_ip: Ipv4Addr) -> Option<Ipv4Addr> {
+    if mac_bytes.is_empty() {
+        return None;
+    }
+    let last_byte = mac_bytes[mac_bytes.len() - 1];
+    // Skip .0, .1 (server), .255 (broadcast)
+    if last_byte < 2 || last_byte == 255 {
+        return Some(Ipv4Addr::new(
+            server_ip.octets()[0],
+            server_ip.octets()[1],
+            server_ip.octets()[2],
+            (100u8).wrapping_add(last_byte),
+        ));
+    }
+    let octets = server_ip.octets();
+    Some(Ipv4Addr::new(octets[0], octets[1], octets[2], last_byte))
 }
 
 /// True if the user-class option carries "iPXE" (plain or RFC-3004 length-prefixed).
@@ -110,6 +137,7 @@ mod tests {
         let plan = plan(&m, &cfg()).unwrap();
         assert_eq!(plan.bootfile, "undionly.kpxe");
         assert_eq!(plan.next_server, Some(Ipv4Addr::new(192, 168, 1, 10)));
+        assert_eq!(plan.yiaddr, Ipv4Addr::new(192, 168, 1, 101)); // from MAC ...ee:01: 100+1=101
     }
 
     #[test]
@@ -122,6 +150,7 @@ mod tests {
             let plan = plan(&m, &cfg()).unwrap();
             assert_eq!(plan.bootfile, "ipxe.efi");
             assert_eq!(plan.next_server, Some(Ipv4Addr::new(192, 168, 1, 10)));
+            assert_eq!(plan.yiaddr, Ipv4Addr::new(192, 168, 1, 101)); // from MAC ...ee:01: 100+1=101
         }
     }
 
@@ -143,6 +172,7 @@ mod tests {
             "http://192.168.1.10/boot.ipxe?mac=aa:bb:cc:dd:ee:01"
         );
         assert_eq!(plan.next_server, None);
+        assert_eq!(plan.yiaddr, Ipv4Addr::new(192, 168, 1, 101)); // from MAC ...ee:01: 100+1=101
     }
 
     #[test]
