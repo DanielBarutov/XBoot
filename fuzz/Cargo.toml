@@ -37,3 +37,9 @@ name = "dhcp_decode"
 path = "fuzz_targets/dhcp_decode.rs"
 test = false
 doc = false
+
+[[bin]]
+name = "tftp_decode"
+path = "fuzz_targets/tftp_decode.rs"
+test = false
+doc = false
