@@ -1,4 +1,5 @@
 use std::net::{IpAddr, Ipv4Addr};
+use std::path::PathBuf;
 
 use serde::Deserialize;
 
@@ -65,7 +66,9 @@ pub struct BootConfig {
     pub server_ip: Ipv4Addr,
     /// Listen address for the `:67` and `:4011` UDP sockets.
     pub bind: IpAddr,
-    /// TFTP file for legacy BIOS (arch 0x0000), served by 06b.
+    /// Directory from which TFTP files are served (phase 06b).
+    pub tftp_root: PathBuf,
+    /// TFTP file for legacy BIOS (arch 0x0000), relative to tftp_root.
     pub bios_filename: String,
     /// TFTP file for UEFI x64 (arch 0x0007/0x0009), served by 06b.
     pub uefi_filename: String,
@@ -150,6 +153,7 @@ writeback = "wb-nvme"
 [boot]
 server_ip       = "192.168.1.10"
 bind            = "0.0.0.0"
+tftp_root       = "/srv/xboot/tftp"
 bios_filename   = "undionly.kpxe"
 uefi_filename   = "ipxe.efi"
 http_script_url = "http://192.168.1.10/boot.ipxe"
@@ -159,9 +163,28 @@ http_script_url = "http://192.168.1.10/boot.ipxe"
         let boot = cfg.boot.expect("boot section present");
         assert_eq!(boot.server_ip, Ipv4Addr::new(192, 168, 1, 10));
         assert_eq!(boot.bind, IpAddr::V4(Ipv4Addr::UNSPECIFIED));
+        assert_eq!(boot.tftp_root, PathBuf::from("/srv/xboot/tftp"));
         assert_eq!(boot.bios_filename, "undionly.kpxe");
         assert_eq!(boot.uefi_filename, "ipxe.efi");
         assert_eq!(boot.http_script_url, "http://192.168.1.10/boot.ipxe");
+    }
+
+    #[test]
+    fn parses_boot_section_windows_tftp_root() {
+        let cfg: Config = toml::from_str(
+            r#"
+[boot]
+server_ip       = "192.168.1.10"
+bind            = "0.0.0.0"
+tftp_root       = "D:\\xboot\\tftp"
+bios_filename   = "undionly.kpxe"
+uefi_filename   = "ipxe.efi"
+http_script_url = "http://192.168.1.10/boot.ipxe"
+"#,
+        )
+        .unwrap();
+        let boot = cfg.boot.unwrap();
+        assert_eq!(boot.tftp_root, PathBuf::from("D:\\xboot\\tftp"));
     }
 
     #[test]
