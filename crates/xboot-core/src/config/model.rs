@@ -58,6 +58,14 @@ pub struct ClientDefaults {
     pub writeback: String,
 }
 
+fn default_http_bind() -> IpAddr {
+    IpAddr::V4(Ipv4Addr::UNSPECIFIED)
+}
+
+fn default_http_port() -> u16 {
+    80
+}
+
 /// Optional `[boot]` section: enables the proxyDHCP / PXE network-boot service.
 /// When absent, the DHCP server is not started.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -66,6 +74,12 @@ pub struct BootConfig {
     pub server_ip: Ipv4Addr,
     /// Listen address for the `:67` and `:4011` UDP sockets.
     pub bind: IpAddr,
+    /// Listen address for the HTTP boot-script server (phase 06c).
+    #[serde(default = "default_http_bind")]
+    pub http_bind: IpAddr,
+    /// Port for the HTTP boot-script server (phase 06c).
+    #[serde(default = "default_http_port")]
+    pub http_port: u16,
     /// Directory from which TFTP files are served (phase 06b).
     pub tftp_root: PathBuf,
     /// TFTP file for legacy BIOS (arch 0x0000), relative to tftp_root.
@@ -163,10 +177,33 @@ http_script_url = "http://192.168.1.10/boot.ipxe"
         let boot = cfg.boot.expect("boot section present");
         assert_eq!(boot.server_ip, Ipv4Addr::new(192, 168, 1, 10));
         assert_eq!(boot.bind, IpAddr::V4(Ipv4Addr::UNSPECIFIED));
+        assert_eq!(boot.http_bind, IpAddr::V4(Ipv4Addr::UNSPECIFIED));
+        assert_eq!(boot.http_port, 80);
         assert_eq!(boot.tftp_root, PathBuf::from("/srv/xboot/tftp"));
         assert_eq!(boot.bios_filename, "undionly.kpxe");
         assert_eq!(boot.uefi_filename, "ipxe.efi");
         assert_eq!(boot.http_script_url, "http://192.168.1.10/boot.ipxe");
+    }
+
+    #[test]
+    fn parses_custom_http_bind_and_port() {
+        let cfg: Config = toml::from_str(
+            r#"
+[boot]
+server_ip       = "192.168.1.10"
+bind            = "0.0.0.0"
+http_bind       = "127.0.0.1"
+http_port       = 8080
+tftp_root       = "/srv/xboot/tftp"
+bios_filename   = "undionly.kpxe"
+uefi_filename   = "ipxe.efi"
+http_script_url = "http://192.168.1.10/boot.ipxe"
+"#,
+        )
+        .unwrap();
+        let boot = cfg.boot.unwrap();
+        assert_eq!(boot.http_bind, IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)));
+        assert_eq!(boot.http_port, 8080);
     }
 
     #[test]
