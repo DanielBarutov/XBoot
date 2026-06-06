@@ -10,7 +10,7 @@ path = "src/main.rs"
 
 [dependencies]
 xboot-core = { path = "../xboot-core" }
-tokio.workspace = true
+tokio = { workspace = true, features = ["net"] }
 tokio-util.workspace = true
 tracing.workspace = true
-tracing-subscriber.workspace = true
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
