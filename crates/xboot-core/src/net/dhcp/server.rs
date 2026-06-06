@@ -6,6 +6,7 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 
 use tokio::net::UdpSocket;
+use tokio_util::sync::CancellationToken;
 
 use crate::config::BootConfig;
 use crate::net::dhcp::decide::{self, OfferPlan};
@@ -16,7 +17,7 @@ use crate::net::dhcp::packet::{self, DhcpMessage, DhcpOption, BOOTREPLY};
 const BROADCAST_FLAG: u16 = 0x8000;
 
 /// Which listener role a datagram arrived on.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Role {
     /// `:67` — answers DISCOVER with a proxy OFFER.
     Proxy,
@@ -24,14 +25,19 @@ pub enum Role {
     BootService,
 }
 
-/// Start the proxyDHCP service: bind both listeners and serve until one errors.
-pub async fn serve(cfg: BootConfig) -> std::io::Result<()> {
+/// Start the proxyDHCP service: bind both listeners and serve until one errors
+/// or the cancellation token fires.
+pub async fn serve(cfg: BootConfig, token: CancellationToken) -> std::io::Result<()> {
     let cfg = Arc::new(cfg);
     let proxy = bind_socket(cfg.bind, 67).await?;
     let bootsvc = bind_socket(cfg.bind, 4011).await?;
     tokio::select! {
-        r = listener_loop(proxy, cfg.clone(), Role::Proxy) => r,
-        r = listener_loop(bootsvc, cfg.clone(), Role::BootService) => r,
+        r = listener_loop(proxy, cfg.clone(), Role::Proxy, token.child_token()) => r,
+        r = listener_loop(bootsvc, cfg.clone(), Role::BootService, token.child_token()) => r,
+        _ = token.cancelled() => {
+            tracing::info!("dhcp: shutting down");
+            Ok(())
+        }
     }
 }
 
@@ -41,17 +47,27 @@ async fn bind_socket(bind: IpAddr, port: u16) -> std::io::Result<UdpSocket> {
     Ok(sock)
 }
 
-/// Receive → handle → send, forever. A bad datagram never breaks the loop.
+/// Receive → handle → send, forever (or until the token fires).
+/// A bad datagram never breaks the loop.
 pub(crate) async fn listener_loop(
     sock: UdpSocket,
     cfg: Arc<BootConfig>,
     role: Role,
+    token: CancellationToken,
 ) -> std::io::Result<()> {
     let mut buf = [0u8; 2048];
     loop {
-        let (n, from) = sock.recv_from(&mut buf).await?;
-        if let Some((reply, dest)) = handle_datagram(&buf[..n], &cfg, role, from) {
-            sock.send_to(&packet::encode(&reply), dest).await?;
+        tokio::select! {
+            result = sock.recv_from(&mut buf) => {
+                let (n, from) = result?;
+                if let Some((reply, dest)) = handle_datagram(&buf[..n], &cfg, role, from) {
+                    sock.send_to(&packet::encode(&reply), dest).await?;
+                }
+            }
+            _ = token.cancelled() => {
+                tracing::info!("dhcp listener ({role:?}): shutting down");
+                return Ok(());
+            }
         }
     }
 }
@@ -290,7 +306,7 @@ mod tests {
         let addr = sock.local_addr().unwrap();
         let cfg = Arc::new(test_cfg());
         tokio::spawn(async move {
-            let _ = listener_loop(sock, cfg, Role::Proxy).await;
+            let _ = listener_loop(sock, cfg, Role::Proxy, CancellationToken::new()).await;
         });
 
         let client = UdpSocket::bind("127.0.0.1:0").await.unwrap();
@@ -326,7 +342,7 @@ mod tests {
         let addr = sock.local_addr().unwrap();
         let cfg = Arc::new(test_cfg());
         tokio::spawn(async move {
-            let _ = listener_loop(sock, cfg, Role::Proxy).await;
+            let _ = listener_loop(sock, cfg, Role::Proxy, CancellationToken::new()).await;
         });
 
         let client = UdpSocket::bind("127.0.0.1:0").await.unwrap();
