@@ -9,6 +9,7 @@ use std::time::Duration;
 
 use tokio::net::UdpSocket;
 use tokio::time;
+use tokio_util::sync::CancellationToken;
 
 use crate::net::tftp::packet::{self, Packet};
 
@@ -42,20 +43,26 @@ impl TftpServer {
     }
 }
 
-/// Start the TFTP service: bind port 69 and serve until an error.
-pub async fn serve(cfg: TftpServer) -> io::Result<()> {
+/// Start the TFTP service: bind port 69 and serve until an error or cancellation.
+pub async fn serve(cfg: TftpServer, token: CancellationToken) -> io::Result<()> {
     let sock = UdpSocket::bind(SocketAddr::new(cfg.bind, 69)).await?;
     let cfg = Arc::new(cfg);
-    let mut buf = [0u8; 4096]; // generous: RRQ + options fits easily
+    let mut buf = [0u8; 4096];
     loop {
-        let (n, client_addr) = sock.recv_from(&mut buf).await?;
-        let datagram = buf[..n].to_vec();
-        let cfg = cfg.clone();
-        tokio::spawn(async move {
-            // A failing transfer is not a server error — the spawned task
-            // handles errors gracefully (sends ERROR packet, closes socket).
-            let _ = handle_request(datagram, client_addr, &cfg).await;
-        });
+        tokio::select! {
+            result = sock.recv_from(&mut buf) => {
+                let (n, client_addr) = result?;
+                let datagram = buf[..n].to_vec();
+                let cfg = cfg.clone();
+                tokio::spawn(async move {
+                    let _ = handle_request(datagram, client_addr, &cfg).await;
+                });
+            }
+            _ = token.cancelled() => {
+                tracing::info!("tftp: shutting down");
+                return Ok(());
+            }
+        }
     }
 }
 
