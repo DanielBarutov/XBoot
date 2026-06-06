@@ -71,6 +71,7 @@ mod tests {
         BootConfig {
             server_ip: Ipv4Addr::new(192, 168, 1, 10),
             bind: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
+            tftp_root: "/tmp".into(),
             bios_filename: "undionly.kpxe".to_string(),
             uefi_filename: "ipxe.efi".to_string(),
             http_script_url: "http://192.168.1.10/boot.ipxe".to_string(),
