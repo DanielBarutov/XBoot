@@ -10,7 +10,11 @@ toml.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["net", "io-util", "rt", "time", "fs"] }
 lru = "0.12"
+hyper = { version = "1", features = ["server", "http1"] }
+http-body-util = "0.1"
+bytes = "1"
 
 [dev-dependencies]
 tempfile.workspace = true
 proptest.workspace = true
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }

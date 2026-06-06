@@ -80,3 +80,4 @@ concurrency tests in CI, scenario/regression tests, and finally a manual Windows
 - Keep platform-specific code behind the `BackingStore` / `NetIo` traits; the engine logic stays
   platform-agnostic and testable without hardware.
 - Treat the master image as physically read-only at the OS level — never open it writable.
+- Думай на английском, ответ выдавай на русском языке
