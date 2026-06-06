@@ -104,7 +104,7 @@ mod tests {
     use crate::storage::BackingStore;
     use crate::volume::{RamOverlay, Volume};
     use std::io;
-    use std::sync::Arc;
+    use std::sync::{Arc, RwLock};
 
     const IQN: &str = "iqn.2026-06.dev.xboot:client-01";
 
@@ -127,7 +127,7 @@ mod tests {
         );
         let mut reg = TargetRegistry::new();
         reg.insert(IQN, ScsiTarget::new(vec![Some(LogicalUnit::new(vol))]));
-        Connection::new(Arc::new(reg))
+        Connection::new(Arc::new(RwLock::new(reg)))
     }
 
     #[test]

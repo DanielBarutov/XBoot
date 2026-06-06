@@ -4,24 +4,41 @@
 use crate::iscsi::registry::TargetRegistry;
 use crate::iscsi::session::{Connection, Stage};
 use crate::iscsi::{decode, PduError, BHS_LEN};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
+use tokio_util::sync::CancellationToken;
 
-/// Accept connections forever, one task per connection.
-pub async fn serve(listener: TcpListener, registry: Arc<TargetRegistry>) -> std::io::Result<()> {
+/// Accept connections forever, one task per connection. Shuts down gracefully
+/// when the `CancellationToken` is fired.
+pub async fn serve(
+    listener: TcpListener,
+    registry: Arc<RwLock<TargetRegistry>>,
+    token: CancellationToken,
+) -> std::io::Result<()> {
     loop {
-        let (sock, _peer) = listener.accept().await?;
-        let reg = registry.clone();
-        tokio::spawn(async move {
-            let _ = handle_conn(sock, reg).await;
-        });
+        tokio::select! {
+            result = listener.accept() => {
+                let (sock, _peer) = result?;
+                let reg = registry.clone();
+                tokio::spawn(async move {
+                    let _ = handle_conn(sock, reg).await;
+                });
+            }
+            _ = token.cancelled() => {
+                tracing::info!("iscsi: shutting down");
+                return Ok(());
+            }
+        }
     }
 }
 
 /// Drive one connection: read bytes, frame PDUs, hand each to the state machine,
 /// write the responses, and stop when the session enters Closing.
-async fn handle_conn(mut sock: TcpStream, registry: Arc<TargetRegistry>) -> std::io::Result<()> {
+async fn handle_conn(
+    mut sock: TcpStream,
+    registry: Arc<RwLock<TargetRegistry>>,
+) -> std::io::Result<()> {
     let mut conn = Connection::new(registry);
     let mut buf: Vec<u8> = Vec::with_capacity(8192);
     let mut tmp = [0u8; 8192];
@@ -80,14 +97,14 @@ mod tests {
         }
     }
 
-    fn registry() -> Arc<TargetRegistry> {
+    fn registry() -> Arc<RwLock<TargetRegistry>> {
         let vol = Volume::new(
             Box::new(MemStore(vec![0u8; 4096])),
             Box::new(RamOverlay::new()),
         );
         let mut reg = TargetRegistry::new();
         reg.insert(IQN, ScsiTarget::new(vec![Some(LogicalUnit::new(vol))]));
-        Arc::new(reg)
+        Arc::new(RwLock::new(reg))
     }
 
     #[tokio::test]
@@ -95,7 +112,8 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let reg = registry();
-        tokio::spawn(async move { serve(listener, reg).await });
+        let token = CancellationToken::new();
+        tokio::spawn(async move { serve(listener, reg, token).await });
 
         let mut sock = TcpStream::connect(addr).await.unwrap();
 
@@ -124,7 +142,7 @@ mod tests {
         assert_eq!(&resp[BHS_LEN..BHS_LEN + 512], &payload[..]);
     }
 
-    fn multi_registry(n: u8) -> Arc<TargetRegistry> {
+    fn multi_registry(n: u8) -> Arc<RwLock<TargetRegistry>> {
         let mut reg = TargetRegistry::new();
         for i in 0..n {
             let vol = Volume::new(
@@ -136,7 +154,7 @@ mod tests {
                 ScsiTarget::new(vec![Some(LogicalUnit::new(vol))]),
             );
         }
-        Arc::new(reg)
+        Arc::new(RwLock::new(reg))
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -144,7 +162,8 @@ mod tests {
         let n: u8 = 8;
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        tokio::spawn(serve(listener, multi_registry(n)));
+        let token = CancellationToken::new();
+        tokio::spawn(serve(listener, multi_registry(n), token));
 
         let mut handles = Vec::new();
         for i in 0..n {

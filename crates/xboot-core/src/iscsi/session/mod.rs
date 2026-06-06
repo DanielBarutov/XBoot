@@ -16,7 +16,7 @@ use crate::iscsi::{
 };
 use params::SessionParams;
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 /// How many commands beyond ExpCmdSN we let the initiator queue.
 const QUEUE_DEPTH: u32 = 16;
@@ -77,7 +77,7 @@ pub(crate) struct PendingWrite {
 
 /// One iSCSI connection (= one session, single-connection in v1).
 pub struct Connection {
-    registry: Arc<TargetRegistry>,
+    registry: Arc<RwLock<TargetRegistry>>,
     stage: Stage,
     params: SessionParams,
     target: Option<Arc<ScsiTarget>>,
@@ -87,7 +87,7 @@ pub struct Connection {
 }
 
 impl Connection {
-    pub fn new(registry: Arc<TargetRegistry>) -> Self {
+    pub fn new(registry: Arc<RwLock<TargetRegistry>>) -> Self {
         Self {
             registry,
             stage: Stage::Login,
@@ -172,7 +172,7 @@ impl Connection {
         // Minimal SendTargets: advertise the one target this connection serves.
         let mut keys = Vec::new();
         if t.text.iter().any(|(k, _)| k == "SendTargets") {
-            for iqn in self.registry.iqns() {
+            for iqn in self.registry.read().unwrap().iqns() {
                 keys.push(("TargetName".to_string(), iqn));
             }
         }
@@ -396,11 +396,11 @@ pub(crate) mod test_support {
     }
 
     /// A registry with one target (IQN above) over an in-memory master of `bytes`.
-    pub(crate) fn registry(bytes: Vec<u8>) -> Arc<TargetRegistry> {
+    pub(crate) fn registry(bytes: Vec<u8>) -> Arc<RwLock<TargetRegistry>> {
         let vol = Volume::new(Box::new(MemStore(bytes)), Box::new(RamOverlay::new()));
         let mut reg = TargetRegistry::new();
         reg.insert(IQN, ScsiTarget::new(vec![Some(LogicalUnit::new(vol))]));
-        Arc::new(reg)
+        Arc::new(RwLock::new(reg))
     }
 
     /// A fresh connection over a 4096-byte (8-block) target.

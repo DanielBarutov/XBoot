@@ -17,7 +17,7 @@ pub(super) fn handle_login(conn: &mut Connection, req: LoginRequest) -> Vec<Outb
     // Resolve the target on first declaration of TargetName.
     if conn.target.is_none() {
         if let Some((_, iqn)) = req.text.iter().find(|(k, _)| k == "TargetName") {
-            conn.target = conn.registry.get(iqn);
+            conn.target = conn.registry.read().unwrap().get(iqn);
             if conn.target.is_none() {
                 return vec![fail(conn, &req)];
             }
