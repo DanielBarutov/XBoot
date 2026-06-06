@@ -32,6 +32,10 @@ pub enum ValidationError {
     InvalidHttpUrl(String),
     #[error("boot.{field} must not be empty")]
     EmptyBootField { field: String },
+    #[error("boot.tftp_root does not exist or is not a directory: {0}")]
+    TftpRootNotDirectory(String),
+    #[error("boot.{field} '{value}' resolves outside tftp_root")]
+    BootFileOutsideRoot { field: String, value: String },
 }
 
 /// Collection of validation errors with a readable multi-line `Display`.
@@ -102,16 +106,35 @@ fn check_profile(
 }
 
 fn check_boot(errors: &mut Vec<ValidationError>, boot: &crate::config::BootConfig) {
+    // Validate tftp_root is a directory
+    if !boot.tftp_root.is_dir() {
+        errors.push(ValidationError::TftpRootNotDirectory(
+            boot.tftp_root.display().to_string(),
+        ));
+    }
+
     if boot.bios_filename.is_empty() {
         errors.push(ValidationError::EmptyBootField {
             field: "bios_filename".to_string(),
         });
+    } else if !is_safe_filename(&boot.bios_filename) {
+        errors.push(ValidationError::BootFileOutsideRoot {
+            field: "bios_filename".to_string(),
+            value: boot.bios_filename.clone(),
+        });
     }
+
     if boot.uefi_filename.is_empty() {
         errors.push(ValidationError::EmptyBootField {
             field: "uefi_filename".to_string(),
         });
+    } else if !is_safe_filename(&boot.uefi_filename) {
+        errors.push(ValidationError::BootFileOutsideRoot {
+            field: "uefi_filename".to_string(),
+            value: boot.uefi_filename.clone(),
+        });
     }
+
     let url = &boot.http_script_url;
     if url.is_empty() {
         errors.push(ValidationError::EmptyBootField {
@@ -120,6 +143,28 @@ fn check_boot(errors: &mut Vec<ValidationError>, boot: &crate::config::BootConfi
     } else if !(url.starts_with("http://") || url.starts_with("https://")) {
         errors.push(ValidationError::InvalidHttpUrl(url.clone()));
     }
+}
+
+/// Reject paths that try to escape tftp_root: absolute paths, `..` segments.
+fn is_safe_filename(name: &str) -> bool {
+    if name.is_empty() {
+        return false;
+    }
+    // Reject absolute paths (Unix and Windows)
+    if name.starts_with('/') || name.starts_with('\\') {
+        return false;
+    }
+    // Reject Windows drive-letter paths (e.g. "C:foo")
+    if name.len() >= 2 && name.as_bytes()[1] == b':' {
+        return false;
+    }
+    // Reject any path component that tries parent traversal
+    for component in name.split(['/', '\\']) {
+        if component == ".." || component == "." {
+            return false;
+        }
+    }
+    true
 }
 
 /// Validate referential integrity, disk-type/role consistency, and MAC formats.
@@ -350,31 +395,37 @@ writeback = "ghost"
 
     #[test]
     fn accepts_valid_boot_section() {
-        let cfg = parse(
+        let tmp = tempfile::tempdir().unwrap();
+        let cfg = parse(&format!(
             r#"
 [boot]
 server_ip       = "192.168.1.10"
 bind            = "0.0.0.0"
+tftp_root       = "{}"
 bios_filename   = "undionly.kpxe"
 uefi_filename   = "ipxe.efi"
 http_script_url = "http://192.168.1.10/boot.ipxe"
 "#,
-        );
+            tmp.path().display()
+        ));
         assert!(validate(&cfg).is_ok());
     }
 
     #[test]
     fn rejects_non_http_boot_url() {
-        let cfg = parse(
+        let tmp = tempfile::tempdir().unwrap();
+        let cfg = parse(&format!(
             r#"
 [boot]
 server_ip       = "192.168.1.10"
 bind            = "0.0.0.0"
+tftp_root       = "{}"
 bios_filename   = "undionly.kpxe"
 uefi_filename   = "ipxe.efi"
 http_script_url = "tftp://192.168.1.10/boot.ipxe"
 "#,
-        );
+            tmp.path().display()
+        ));
         let errs = validate(&cfg).unwrap_err().0;
         assert!(errs
             .iter()
@@ -383,30 +434,55 @@ http_script_url = "tftp://192.168.1.10/boot.ipxe"
 
     #[test]
     fn rejects_empty_uefi_filename() {
-        let cfg = parse(
+        let tmp = tempfile::tempdir().unwrap();
+        let cfg = parse(&format!(
             r#"
 [boot]
 server_ip       = "192.168.1.10"
 bind            = "0.0.0.0"
+tftp_root       = "{}"
 bios_filename   = "undionly.kpxe"
 uefi_filename   = ""
 http_script_url = "http://192.168.1.10/boot.ipxe"
 "#,
-        );
+            tmp.path().display()
+        ));
         let errs = validate(&cfg).unwrap_err().0;
-        assert!(errs
-            .iter()
-            .any(|e| matches!(e, ValidationError::EmptyBootField { field } if field == "uefi_filename")));
+        assert!(errs.iter().any(
+            |e| matches!(e, ValidationError::EmptyBootField { field } if field == "uefi_filename")
+        ));
     }
 
     #[test]
     fn rejects_empty_boot_filename() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cfg = parse(&format!(
+            r#"
+[boot]
+server_ip       = "192.168.1.10"
+bind            = "0.0.0.0"
+tftp_root       = "{}"
+bios_filename   = ""
+uefi_filename   = "ipxe.efi"
+http_script_url = "http://192.168.1.10/boot.ipxe"
+"#,
+            tmp.path().display()
+        ));
+        let errs = validate(&cfg).unwrap_err().0;
+        assert!(errs.iter().any(
+            |e| matches!(e, ValidationError::EmptyBootField { field } if field == "bios_filename")
+        ));
+    }
+
+    #[test]
+    fn rejects_missing_tftp_root() {
         let cfg = parse(
             r#"
 [boot]
 server_ip       = "192.168.1.10"
 bind            = "0.0.0.0"
-bios_filename   = ""
+tftp_root       = "/nonexistent/path/that/is/not/a/dir"
+bios_filename   = "undionly.kpxe"
 uefi_filename   = "ipxe.efi"
 http_script_url = "http://192.168.1.10/boot.ipxe"
 "#,
@@ -414,6 +490,68 @@ http_script_url = "http://192.168.1.10/boot.ipxe"
         let errs = validate(&cfg).unwrap_err().0;
         assert!(errs
             .iter()
-            .any(|e| matches!(e, ValidationError::EmptyBootField { field } if field == "bios_filename")));
+            .any(|e| matches!(e, ValidationError::TftpRootNotDirectory(_))));
+    }
+
+    #[test]
+    fn rejects_parent_traversal_bios_filename() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cfg = parse(&format!(
+            r#"
+[boot]
+server_ip       = "192.168.1.10"
+bind            = "0.0.0.0"
+tftp_root       = "{}"
+bios_filename   = "../secret"
+uefi_filename   = "ipxe.efi"
+http_script_url = "http://192.168.1.10/boot.ipxe"
+"#,
+            tmp.path().display()
+        ));
+        let errs = validate(&cfg).unwrap_err().0;
+        assert!(errs.iter().any(|e| matches!(
+            e,
+            ValidationError::BootFileOutsideRoot { field, .. } if field == "bios_filename"
+        )));
+    }
+
+    #[test]
+    fn rejects_absolute_bios_filename() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cfg = parse(&format!(
+            r#"
+[boot]
+server_ip       = "192.168.1.10"
+bind            = "0.0.0.0"
+tftp_root       = "{}"
+bios_filename   = "/etc/passwd"
+uefi_filename   = "ipxe.efi"
+http_script_url = "http://192.168.1.10/boot.ipxe"
+"#,
+            tmp.path().display()
+        ));
+        let errs = validate(&cfg).unwrap_err().0;
+        assert!(errs.iter().any(|e| matches!(
+            e,
+            ValidationError::BootFileOutsideRoot { field, .. } if field == "bios_filename"
+        )));
+    }
+
+    #[test]
+    fn accepts_valid_tftp_root() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cfg = parse(&format!(
+            r#"
+[boot]
+server_ip       = "192.168.1.10"
+bind            = "0.0.0.0"
+tftp_root       = "{}"
+bios_filename   = "undionly.kpxe"
+uefi_filename   = "ipxe.efi"
+http_script_url = "http://192.168.1.10/boot.ipxe"
+"#,
+            tmp.path().display()
+        ));
+        assert!(validate(&cfg).is_ok());
     }
 }
