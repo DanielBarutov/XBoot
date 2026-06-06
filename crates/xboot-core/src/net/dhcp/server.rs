@@ -82,24 +82,31 @@ fn handle_datagram(data: &[u8], cfg: &BootConfig, is_port67: bool, from: SocketA
     };
 
     if is_port67 {
-        // Port 67: handle both DHCP and proxyDHCP
+        // Port 67: handle DISCOVER and REQUEST for DHCP and proxyDHCP
         let is_pxe = matches!(req.vendor_class(), Some(v) if v.starts_with(b"PXEClient"));
-        let is_discover = req.message_type() == Some(msg_type::DISCOVER);
+        let msg_type_val = req.message_type();
 
-        if !is_discover {
-            return None; // only DISCOVER on port 67
+        match msg_type_val {
+            Some(msg_type::DISCOVER) => {
+                // DISCOVER → OFFER
+                let plan = decide::plan(&req, cfg)?;
+                let vendor = options::pxe_offer_vendor_opts(cfg.server_ip);
+                let role = if is_pxe { Role::ProxyDhcp } else { Role::Dhcp };
+                let reply = build_reply(&req, &plan, cfg, msg_type::OFFER, vendor, role);
+                let dest = reply_dest(&req, from);
+                Some((reply, dest))
+            }
+            Some(msg_type::REQUEST) => {
+                // REQUEST → ACK
+                let plan = decide::plan(&req, cfg)?;
+                let vendor = options::pxe_offer_vendor_opts(cfg.server_ip);
+                let role = if is_pxe { Role::ProxyDhcp } else { Role::Dhcp };
+                let reply = build_reply(&req, &plan, cfg, msg_type::ACK, vendor, role);
+                let dest = reply_dest(&req, from);
+                Some((reply, dest))
+            }
+            _ => None,
         }
-
-        let plan = decide::plan(&req, cfg)?;
-        let vendor = options::pxe_offer_vendor_opts(cfg.server_ip);
-
-        // Always respond with IP + full DHCP options
-        // For PXE clients, also add boot information
-        let role = if is_pxe { Role::ProxyDhcp } else { Role::Dhcp };
-        let reply = build_reply(&req, &plan, cfg, msg_type::OFFER, vendor, role);
-
-        let dest = reply_dest(&req, from);
-        Some((reply, dest))
     } else {
         // Port 4011: PXE Boot Server — only REQUEST
         if req.message_type() != Some(msg_type::REQUEST) {
