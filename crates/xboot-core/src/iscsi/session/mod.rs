@@ -231,6 +231,12 @@ impl Connection {
         }
 
         let outcome = target.execute(&cmd, &cmd.data);
+        if outcome.status != 0x00 {
+            tracing::warn!(
+                "iscsi: SCSI CHECK CONDITION cdb[0]=0x{:02x} status=0x{:02x} sense={:02x?}",
+                cmd.cdb[0], outcome.status, &outcome.sense[..outcome.sense.len().min(14)]
+            );
+        }
         // READ that produced data -> chunked Data-In with status on the final PDU.
         if cmd.read && outcome.status == 0x00 && !outcome.data.is_empty() {
             return self.data_in_chunks(&cmd, outcome.data);
