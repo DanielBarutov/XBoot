@@ -439,11 +439,11 @@ mod login_tests {
     #[test]
     fn collapsed_login_to_full_feature_succeeds() {
         let mut c = conn();
-        // Operational stage (1) transiting to FullFeature (1), declaring TargetName.
+        // CSG=0 (Security), NSG=3 (FullFeature) — skip auth, transit directly.
         let req = login_req(
             true,
-            1,
-            1,
+            0,
+            3,
             &[("TargetName", IQN), ("MaxBurstLength", "16384")],
         );
         let out = c.handle(Request::Login(req), &[0u8; 48]);
@@ -453,14 +453,14 @@ mod login_tests {
         };
         assert_eq!(resp.status_class, 0);
         assert!(resp.transit);
-        assert_eq!(resp.nsg, 1);
+        assert_eq!(resp.nsg, 3);
         assert_eq!(c.stage(), Stage::FullFeature);
     }
 
     #[test]
     fn unknown_target_fails_login() {
         let mut c = conn();
-        let req = login_req(true, 1, 1, &[("TargetName", "iqn.2026-06.dev.xboot:ghost")]);
+        let req = login_req(true, 0, 3, &[("TargetName", "iqn.2026-06.dev.xboot:ghost")]);
         let out = c.handle(Request::Login(req), &[0u8; 48]);
         let Outbound::Login(resp) = &out[0] else {
             panic!("expected LoginResponse");
@@ -472,7 +472,7 @@ mod login_tests {
     #[test]
     fn missing_target_name_fails_login() {
         let mut c = conn();
-        let req = login_req(true, 1, 1, &[("HeaderDigest", "None")]);
+        let req = login_req(true, 0, 3, &[("HeaderDigest", "None")]);
         let out = c.handle(Request::Login(req), &[0u8; 48]);
         let Outbound::Login(resp) = &out[0] else {
             panic!("expected LoginResponse");
@@ -485,8 +485,8 @@ mod login_tests {
         let mut c = conn();
         let req = login_req(
             true,
-            1,
-            1,
+            0,
+            3,
             &[("TargetName", IQN), ("MaxBurstLength", "16384")],
         );
         let out = c.handle(Request::Login(req), &[0u8; 48]);
@@ -530,8 +530,8 @@ mod read_tests {
         let req = crate::iscsi::LoginRequest {
             transit: true,
             continue_: false,
-            csg: 1,
-            nsg: 1,
+            csg: 0,
+            nsg: 3,
             version_max: 0,
             version_min: 0,
             isid: [0, 0, 0, 0, 0, 1],
@@ -635,8 +635,8 @@ mod write_tests {
         let req = crate::iscsi::LoginRequest {
             transit: true,
             continue_: false,
-            csg: 1,
-            nsg: 1,
+            csg: 0,
+            nsg: 3,
             version_max: 0,
             version_min: 0,
             isid: [0, 0, 0, 0, 0, 1],
@@ -789,8 +789,8 @@ mod control_tests {
         let req = crate::iscsi::LoginRequest {
             transit: true,
             continue_: false,
-            csg: 1,
-            nsg: 1,
+            csg: 0,
+            nsg: 3,
             version_max: 0,
             version_min: 0,
             isid: [0, 0, 0, 0, 0, 1],

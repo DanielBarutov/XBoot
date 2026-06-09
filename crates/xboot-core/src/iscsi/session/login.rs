@@ -46,7 +46,9 @@ pub(super) fn handle_login(conn: &mut Connection, req: LoginRequest) -> Vec<Outb
     reply_keys.push(("HeaderDigest".into(), "None".into()));
     reply_keys.push(("DataDigest".into(), "None".into()));
 
-    let transit = req.transit && req.nsg == 1;
+    // Transit to FullFeature when client requests it with NSG=3.
+    // Handles both CSG=0→NSG=3 (skip auth) and CSG=1→NSG=3 (normal).
+    let transit = req.transit && req.nsg == 3;
     if transit {
         conn.stage = Stage::FullFeature;
     }

@@ -118,7 +118,7 @@ mod tests {
         let mut sock = TcpStream::connect(addr).await.unwrap();
 
         // Login.
-        sock.write_all(&testkit::login_pdu(true, 1, 1, &[("TargetName", IQN)]))
+        sock.write_all(&testkit::login_pdu(true, 0, 3, &[("TargetName", IQN)]))
             .await
             .unwrap();
         let resp = read_one_pdu(&mut sock).await;
@@ -170,7 +170,7 @@ mod tests {
             handles.push(tokio::spawn(async move {
                 let iqn = format!("{IQN}-{i}");
                 let mut sock = TcpStream::connect(addr).await.unwrap();
-                sock.write_all(&testkit::login_pdu(true, 1, 1, &[("TargetName", &iqn)]))
+                sock.write_all(&testkit::login_pdu(true, 0, 3, &[("TargetName", &iqn)]))
                     .await
                     .unwrap();
                 let _ = read_one_pdu(&mut sock).await;

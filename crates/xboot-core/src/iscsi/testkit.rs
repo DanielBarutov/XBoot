@@ -14,8 +14,8 @@ pub(crate) fn login_pdu(transit: bool, csg: u8, nsg: u8, keys: &[(&str, &str)]) 
     if transit {
         h[1] |= 0x80;
     }
-    h[1] |= (csg & 0x3) << 2;
-    h[1] |= nsg & 0x3;
+    h[1] |= (csg & 0x3) << 4;
+    h[1] |= (nsg & 0x3) << 2;
     h[13] = 1; // ISID byte
     put32(&mut h, 16, 1); // ITT
     let text = encode_keys(keys);
@@ -135,7 +135,8 @@ mod tests {
         let mut c = conn();
 
         // Login -> FullFeature.
-        let out = step(&mut c, &login_pdu(true, 1, 1, &[("TargetName", IQN)]));
+        // CSG=0 (Security), NSG=3 (FullFeature) — skip auth, transit directly.
+        let out = step(&mut c, &login_pdu(true, 0, 3, &[("TargetName", IQN)]));
         assert!(matches!(out[0], Outbound::Login(_)));
         assert_eq!(c.stage(), Stage::FullFeature);
 
