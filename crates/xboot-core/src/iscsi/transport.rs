@@ -51,25 +51,35 @@ async fn handle_conn(
             match decode(&buf) {
                 Ok((req, used)) => {
                     if buf.len() >= crate::iscsi::BHS_LEN {
-                        tracing::info!(
-                            "iscsi: rx opcode=0x{:02x} byte1=0x{:02x} len={} from {:?}",
-                            buf[0] & 0x3f,
-                            buf[1],
-                            used,
-                            peer
-                        );
+                        let op = buf[0] & 0x3f;
+                        // 0x01=SCSI_CMD, 0x05=DATA_OUT — log at debug when they're bulk data
+                        if op == 0x01 && buf[1] & 0x40 != 0 {
+                            // SCSI READ command — debug only
+                            tracing::debug!("iscsi: rx READ len={} from {:?}", used, peer);
+                        } else {
+                            tracing::info!(
+                                "iscsi: rx opcode=0x{:02x} byte1=0x{:02x} len={} from {:?}",
+                                op, buf[1], used, peer
+                            );
+                        }
                     }
                     let bhs = buf[..BHS_LEN].to_vec();
                     let responses = conn.handle(req, &bhs);
                     for out in &responses {
                         let encoded = out.encode();
-                        tracing::info!(
-                            "iscsi: tx opcode=0x{:02x} byte1=0x{:02x} len={} to {:?}",
-                            encoded.get(0).copied().unwrap_or(0) & 0x3f,
-                            encoded.get(1).copied().unwrap_or(0),
-                            encoded.len(),
-                            peer
-                        );
+                        let tx_op = encoded.get(0).copied().unwrap_or(0) & 0x3f;
+                        if tx_op == 0x25 {
+                            // DATA-IN — debug only
+                            tracing::debug!("iscsi: tx DATA-IN len={} to {:?}", encoded.len(), peer);
+                        } else {
+                            tracing::info!(
+                                "iscsi: tx opcode=0x{:02x} byte1=0x{:02x} len={} to {:?}",
+                                tx_op,
+                                encoded.get(1).copied().unwrap_or(0),
+                                encoded.len(),
+                                peer
+                            );
+                        }
                         sock.write_all(&encoded).await?;
                     }
                     buf.drain(..used);

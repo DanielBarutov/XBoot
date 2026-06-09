@@ -212,10 +212,21 @@ impl Connection {
     /// final one); WRITE is handled in Task 5; non-data commands return a SCSI
     /// Response. `bhs` is kept for Task 5's protocol rejects.
     fn scsi_command(&mut self, cmd: crate::iscsi::ScsiCommand, _bhs: &[u8]) -> Vec<Outbound> {
-        tracing::info!(
-            "iscsi: SCSI cmd lun={} cdb={:02x?} edtl={} read={} write={}",
-            cmd.lun, &cmd.cdb[..cmd.cdb.len().min(10)], cmd.edtl, cmd.read, cmd.write
-        );
+        let opcode = cmd.cdb[0];
+        if opcode != 0x28 && opcode != 0x88 {
+            // log non-READ commands at info; READs are debug-only to avoid spam
+            tracing::info!(
+                "iscsi: SCSI cmd lun={} cdb={:02x?} edtl={} read={} write={}",
+                cmd.lun, &cmd.cdb[..cmd.cdb.len().min(10)], cmd.edtl, cmd.read, cmd.write
+            );
+        } else {
+            tracing::debug!(
+                "iscsi: SCSI READ lun={} lba=0x{:08x} blocks={}",
+                cmd.lun,
+                u32::from_be_bytes([cmd.cdb[2], cmd.cdb[3], cmd.cdb[4], cmd.cdb[5]]),
+                u16::from_be_bytes([cmd.cdb[7], cmd.cdb[8]])
+            );
+        }
         let target = match &self.target {
             Some(t) => t.clone(),
             None => {
