@@ -14,8 +14,8 @@ pub(crate) fn login_pdu(transit: bool, csg: u8, nsg: u8, keys: &[(&str, &str)]) 
     if transit {
         h[1] |= 0x80;
     }
-    h[1] |= (csg & 0x3) << 4;
-    h[1] |= (nsg & 0x3) << 2;
+    h[1] |= (csg & 0x3) << 2;
+    h[1] |= nsg & 0x3;
     h[13] = 1; // ISID byte
     put32(&mut h, 16, 1); // ITT
     let text = encode_keys(keys);

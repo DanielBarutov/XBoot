@@ -25,37 +25,42 @@ pub(super) fn handle_login(conn: &mut Connection, req: LoginRequest) -> Vec<Outb
             if conn.target.is_none() {
                 return vec![fail(conn, &req)];
             }
-        } else if req.transit {
+        } else if req.transit && req.nsg == 3 {
             // Transiting to FullFeature without ever naming a target: error.
             return vec![fail(conn, &req)];
         }
+        // NSG=1 with no TargetName is fine — initiator will send it in the next PDU.
     }
 
-    // Negotiate the operational keys; echo our agreed values back.
+    // Negotiate operational keys (only during the operational phase, CSG=1, or when
+    // jumping directly to FullFeature from security, CSG=0→NSG=3).
     let mut reply_keys: Vec<(String, String)> = Vec::new();
-    for (k, v) in &req.text {
-        conn.params.negotiate(k, v);
+    if req.csg == 1 || (req.csg == 0 && req.nsg == 3) {
+        for (k, v) in &req.text {
+            conn.params.negotiate(k, v);
+        }
+        reply_keys.push((
+            "MaxBurstLength".into(),
+            conn.params.max_burst_length.to_string(),
+        ));
+        reply_keys.push((
+            "FirstBurstLength".into(),
+            conn.params.first_burst_length.to_string(),
+        ));
+        reply_keys.push(("ImmediateData".into(), yes_no(conn.params.immediate_data)));
+        reply_keys.push(("InitialR2T".into(), yes_no(conn.params.initial_r2t)));
+        reply_keys.push(("HeaderDigest".into(), "None".into()));
+        reply_keys.push(("DataDigest".into(), "None".into()));
     }
-    // Echo the keys whose negotiated value the initiator needs to know.
-    reply_keys.push((
-        "MaxBurstLength".into(),
-        conn.params.max_burst_length.to_string(),
-    ));
-    reply_keys.push((
-        "FirstBurstLength".into(),
-        conn.params.first_burst_length.to_string(),
-    ));
-    reply_keys.push(("ImmediateData".into(), yes_no(conn.params.immediate_data)));
-    reply_keys.push(("InitialR2T".into(), yes_no(conn.params.initial_r2t)));
-    reply_keys.push(("HeaderDigest".into(), "None".into()));
-    reply_keys.push(("DataDigest".into(), "None".into()));
 
-    // Transit to FullFeature when client requests it with NSG=3.
-    // Handles both CSG=0→NSG=3 (skip auth) and CSG=1→NSG=3 (normal).
-    let transit = req.transit && req.nsg == 3;
-    if transit {
+    // iPXE does a 2-step login: CSG=0→NSG=1 (skip security), then CSG=1→NSG=3 (FullFeature).
+    // We accept any requested transit and advance to FullFeature only when NSG=3.
+    let transit = req.transit && (req.nsg == 1 || req.nsg == 3);
+    if transit && req.nsg == 3 {
         conn.stage = Stage::FullFeature;
         tracing::info!("iscsi: login → FullFeature (transit approved)");
+    } else if transit {
+        tracing::info!("iscsi: login stage 0→1 accepted, waiting for operational PDU");
     } else {
         tracing::info!(
             "iscsi: login → still Login stage (transit={}, nsg={})",

@@ -156,8 +156,8 @@ pub fn decode(buf: &[u8]) -> Result<(Request, usize), PduError> {
         opcode::LOGIN_REQ => Request::Login(LoginRequest {
             transit: h[1] & 0x80 != 0,
             continue_: h[1] & 0x40 != 0,
-            csg: (h[1] >> 4) & 0x3,
-            nsg: (h[1] >> 2) & 0x3,
+            csg: (h[1] >> 2) & 0x3,
+            nsg: h[1] & 0x3,
             version_max: h[2],
             version_min: h[3],
             isid: [h[8], h[9], h[10], h[11], h[12], h[13]],
@@ -295,8 +295,8 @@ impl LoginResponse {
         if self.continue_ {
             h[1] |= 0x40;
         }
-        h[1] |= (self.csg & 0x3) << 4;
-        h[1] |= (self.nsg & 0x3) << 2;
+        h[1] |= (self.csg & 0x3) << 2;
+        h[1] |= self.nsg & 0x3;
         h[2] = self.version_max;
         h[3] = self.version_active;
         h[8..14].copy_from_slice(&self.isid);
@@ -596,7 +596,7 @@ mod tests {
     #[test]
     fn decodes_login_request_fields_and_text() {
         let mut b = bhs(opcode::LOGIN_REQ).to_vec();
-        b[1] = 0x9C; // T=1, C=0, CSG=1 (bits 5..4 = 01), NSG=3 (bits 3..2 = 11)
+        b[1] = 0x87; // T=1, C=0, CSG=1 (bits 3..2 = 01), NSG=3 (bits 1..0 = 11)
         b[2] = 0x00; // version_max
         b[3] = 0x00; // version_min
         b[8..14].copy_from_slice(&[1, 2, 3, 4, 5, 6]); // ISID
