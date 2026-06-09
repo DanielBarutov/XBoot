@@ -8,6 +8,10 @@ use crate::iscsi::{LoginRequest, LoginResponse};
 /// moves the connection to FullFeature. On a missing/unknown target, fails the login
 /// with status-class 0x02 and marks the connection Closing.
 pub(super) fn handle_login(conn: &mut Connection, req: LoginRequest) -> Vec<Outbound> {
+    tracing::info!(
+        "iscsi: login PDU transit={} csg={} nsg={} isid={:x?} tsih={} keys={:?}",
+        req.transit, req.csg, req.nsg, req.isid, req.tsih, req.text
+    );
     // Initialize sequencing from the first login PDU.
     if conn.stat_sn == 0 {
         conn.stat_sn = req.exp_stat_sn;
@@ -51,6 +55,12 @@ pub(super) fn handle_login(conn: &mut Connection, req: LoginRequest) -> Vec<Outb
     let transit = req.transit && req.nsg == 3;
     if transit {
         conn.stage = Stage::FullFeature;
+        tracing::info!("iscsi: login → FullFeature (transit approved)");
+    } else {
+        tracing::info!(
+            "iscsi: login → still Login stage (transit={}, nsg={})",
+            req.transit, req.nsg
+        );
     }
 
     vec![Outbound::Login(LoginResponse {

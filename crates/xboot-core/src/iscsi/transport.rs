@@ -39,6 +39,8 @@ async fn handle_conn(
     mut sock: TcpStream,
     registry: Arc<RwLock<TargetRegistry>>,
 ) -> std::io::Result<()> {
+    let peer = sock.peer_addr().ok();
+    tracing::info!("iscsi: new connection from {:?}", peer);
     let mut conn = Connection::new(registry);
     let mut buf: Vec<u8> = Vec::with_capacity(8192);
     let mut tmp = [0u8; 8192];
@@ -48,19 +50,44 @@ async fn handle_conn(
         loop {
             match decode(&buf) {
                 Ok((req, used)) => {
+                    if buf.len() >= crate::iscsi::BHS_LEN {
+                        tracing::info!(
+                            "iscsi: rx opcode=0x{:02x} byte1=0x{:02x} len={} from {:?}",
+                            buf[0] & 0x3f,
+                            buf[1],
+                            used,
+                            peer
+                        );
+                    }
                     let bhs = buf[..BHS_LEN].to_vec();
-                    for out in conn.handle(req, &bhs) {
-                        sock.write_all(&out.encode()).await?;
+                    let responses = conn.handle(req, &bhs);
+                    for out in &responses {
+                        let encoded = out.encode();
+                        tracing::info!(
+                            "iscsi: tx opcode=0x{:02x} byte1=0x{:02x} len={} to {:?}",
+                            encoded.get(0).copied().unwrap_or(0) & 0x3f,
+                            encoded.get(1).copied().unwrap_or(0),
+                            encoded.len(),
+                            peer
+                        );
+                        sock.write_all(&encoded).await?;
                     }
                     buf.drain(..used);
                     if conn.stage() == Stage::Closing {
+                        tracing::info!("iscsi: closing connection to {:?}", peer);
                         sock.flush().await?;
                         return Ok(());
                     }
                 }
                 Err(PduError::ShortHeader) | Err(PduError::ShortData) => break,
-                Err(_structural) => {
+                Err(e) => {
                     // Malformed framing: best effort close.
+                    tracing::warn!(
+                        "iscsi: framing error {:?} from {:?}, buf[..8]={:02x?}",
+                        e,
+                        peer,
+                        &buf[..buf.len().min(8)]
+                    );
                     sock.flush().await?;
                     return Ok(());
                 }
@@ -68,6 +95,7 @@ async fn handle_conn(
         }
         let n = sock.read(&mut tmp).await?;
         if n == 0 {
+            tracing::info!("iscsi: peer {:?} closed connection", peer);
             return Ok(()); // peer closed
         }
         buf.extend_from_slice(&tmp[..n]);
