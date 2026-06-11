@@ -144,8 +144,7 @@ pub(crate) fn diff_vhd(data: &[u8], block_size: u32, present: &[u64]) -> Vec<u8>
     hdr[32..36].copy_from_slice(&block_size.to_be_bytes());
     out.extend_from_slice(&hdr);
 
-    let block_has_present =
-        |i: usize| present.iter().any(|&s| s / sectors_per_block == i as u64);
+    let block_has_present = |i: usize| present.iter().any(|&s| s / sectors_per_block == i as u64);
     let mut bat = vec![0xFFFF_FFFFu32; n_blocks as usize];
     let mut next_block_sector = (blocks_start / 512) as u32;
     for (i, entry) in bat.iter_mut().enumerate() {

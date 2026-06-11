@@ -72,11 +72,19 @@ pub(crate) async fn listener_loop(
 }
 
 /// Pure request→reply decision (no sockets). `None` = drop silently.
-fn handle_datagram(data: &[u8], cfg: &BootConfig, is_port67: bool, from: SocketAddr) -> Option<(DhcpMessage, SocketAddr)> {
+fn handle_datagram(
+    data: &[u8],
+    cfg: &BootConfig,
+    is_port67: bool,
+    from: SocketAddr,
+) -> Option<(DhcpMessage, SocketAddr)> {
     let req = match packet::parse(data) {
         Ok(m) => m,
         Err(e) => {
-            eprintln!("dhcp: dropping malformed datagram ({} bytes): {e}", data.len());
+            eprintln!(
+                "dhcp: dropping malformed datagram ({} bytes): {e}",
+                data.len()
+            );
             return None;
         }
     };
@@ -130,12 +138,10 @@ pub(crate) fn build_reply(
     vendor43: Vec<u8>,
     role: Role,
 ) -> DhcpMessage {
-    let mut opts = vec![
-        DhcpOption {
-            code: options::MSG_TYPE,
-            data: vec![mtype],
-        },
-    ];
+    let mut opts = vec![DhcpOption {
+        code: options::MSG_TYPE,
+        data: vec![mtype],
+    }];
 
     // Server ID only for regular DHCP, not proxyDHCP
     if role == Role::Dhcp || role == Role::BootServer {
@@ -199,8 +205,8 @@ pub(crate) fn build_reply(
         flags: req.flags,
         ciaddr: Ipv4Addr::UNSPECIFIED,
         yiaddr: match role {
-            Role::BootServer => Ipv4Addr::UNSPECIFIED,  // No IP for BootServer
-            _ => plan.yiaddr,                            // Always assign IP for DHCP/proxyDHCP
+            Role::BootServer => Ipv4Addr::UNSPECIFIED, // No IP for BootServer
+            _ => plan.yiaddr,                          // Always assign IP for DHCP/proxyDHCP
         },
         siaddr: plan.next_server.unwrap_or(Ipv4Addr::UNSPECIFIED),
         giaddr: req.giaddr,
@@ -297,7 +303,7 @@ mod tests {
             reply.option(options::BOOTFILE_NAME),
             Some(b"undionly.kpxe".as_ref())
         ); // has boot file
-        // Should also have DHCP options
+           // Should also have DHCP options
         assert_eq!(reply.option(1), Some([255, 255, 255, 0].as_ref())); // Subnet Mask
         assert_eq!(reply.option(3), Some([192, 168, 1, 10].as_ref())); // Gateway
     }

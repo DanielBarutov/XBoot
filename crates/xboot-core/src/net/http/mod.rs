@@ -126,7 +126,12 @@ async fn handle(
     // Generate the boot script.
     let server_ip = boot.server_ip.to_string();
     let script = boot_script::generate(&iqn, &server_ip);
-    tracing::info!("http: serving boot script for mac={} iqn={} server_ip={}", mac, iqn, server_ip);
+    tracing::info!(
+        "http: serving boot script for mac={} iqn={} server_ip={}",
+        mac,
+        iqn,
+        server_ip
+    );
 
     Ok(Response::builder()
         .status(StatusCode::OK)

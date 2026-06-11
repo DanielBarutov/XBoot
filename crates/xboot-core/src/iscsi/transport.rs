@@ -63,7 +63,10 @@ async fn handle_conn(
                         } else {
                             tracing::info!(
                                 "iscsi: rx opcode=0x{:02x} byte1=0x{:02x} len={} from {:?}",
-                                op, buf[1], used, peer
+                                op,
+                                buf[1],
+                                used,
+                                peer
                             );
                         }
                     }
@@ -74,7 +77,11 @@ async fn handle_conn(
                         let tx_op = encoded.first().copied().unwrap_or(0) & 0x3f;
                         if tx_op == 0x25 {
                             // DATA-IN — debug only
-                            tracing::debug!("iscsi: tx DATA-IN len={} to {:?}", encoded.len(), peer);
+                            tracing::debug!(
+                                "iscsi: tx DATA-IN len={} to {:?}",
+                                encoded.len(),
+                                peer
+                            );
                         } else {
                             tracing::info!(
                                 "iscsi: tx opcode=0x{:02x} byte1=0x{:02x} len={} to {:?}",
@@ -116,7 +123,7 @@ async fn handle_conn(
             Ok(r) => r?,
             Err(_elapsed) => {
                 idle_secs += 5;
-                if idle_secs <= 15 || idle_secs % 60 == 0 {
+                if idle_secs <= 15 || idle_secs.is_multiple_of(60) {
                     tracing::info!(
                         "iscsi: peer {:?} silent for {}s (total_rx={} buffered={} buf[..16]={:02x?})",
                         peer,

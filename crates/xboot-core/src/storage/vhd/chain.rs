@@ -235,7 +235,11 @@ mod tests {
     fn size_mismatch_rejected() {
         let dir = tmp_dir("mismatch");
         let base_path = dir.join("m.vhd");
-        std::fs::write(&base_path, fixtures::dynamic_vhd(&vec![1u8; BS as usize], BS)).unwrap();
+        std::fs::write(
+            &base_path,
+            fixtures::dynamic_vhd(&vec![1u8; BS as usize], BS),
+        )
+        .unwrap();
         let p1 = dir.join("m.001.vhd");
         std::fs::write(
             &p1,

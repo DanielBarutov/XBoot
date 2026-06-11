@@ -10,7 +10,12 @@ use crate::iscsi::{LoginRequest, LoginResponse};
 pub(super) fn handle_login(conn: &mut Connection, req: LoginRequest) -> Vec<Outbound> {
     tracing::info!(
         "iscsi: login PDU transit={} csg={} nsg={} isid={:x?} tsih={} keys={:?}",
-        req.transit, req.csg, req.nsg, req.isid, req.tsih, req.text
+        req.transit,
+        req.csg,
+        req.nsg,
+        req.isid,
+        req.tsih,
+        req.text
     );
     // Initialize sequencing from the first login PDU.
     if conn.stat_sn == 0 {
@@ -64,7 +69,8 @@ pub(super) fn handle_login(conn: &mut Connection, req: LoginRequest) -> Vec<Outb
     } else {
         tracing::info!(
             "iscsi: login → still Login stage (transit={}, nsg={})",
-            req.transit, req.nsg
+            req.transit,
+            req.nsg
         );
     }
 

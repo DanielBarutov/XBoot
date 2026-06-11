@@ -217,18 +217,30 @@ impl Connection {
             let lba = if opcode == 0x28 {
                 u32::from_be_bytes([cmd.cdb[2], cmd.cdb[3], cmd.cdb[4], cmd.cdb[5]]) as u64
             } else {
-                u64::from_be_bytes([cmd.cdb[2], cmd.cdb[3], cmd.cdb[4], cmd.cdb[5], cmd.cdb[6], cmd.cdb[7], cmd.cdb[8], cmd.cdb[9]])
+                u64::from_be_bytes([
+                    cmd.cdb[2], cmd.cdb[3], cmd.cdb[4], cmd.cdb[5], cmd.cdb[6], cmd.cdb[7],
+                    cmd.cdb[8], cmd.cdb[9],
+                ])
             };
             let blocks = if opcode == 0x28 {
                 u16::from_be_bytes([cmd.cdb[7], cmd.cdb[8]]) as u64
             } else {
                 u32::from_be_bytes([cmd.cdb[10], cmd.cdb[11], cmd.cdb[12], cmd.cdb[13]]) as u64
             };
-            tracing::info!("iscsi: READ lun={} lba=0x{:x} blocks={}", cmd.lun, lba, blocks);
+            tracing::info!(
+                "iscsi: READ lun={} lba=0x{:x} blocks={}",
+                cmd.lun,
+                lba,
+                blocks
+            );
         } else {
             tracing::info!(
                 "iscsi: SCSI cmd lun={} cdb={:02x?} edtl={} read={} write={}",
-                cmd.lun, &cmd.cdb[..cmd.cdb.len().min(10)], cmd.edtl, cmd.read, cmd.write
+                cmd.lun,
+                &cmd.cdb[..cmd.cdb.len().min(10)],
+                cmd.edtl,
+                cmd.read,
+                cmd.write
             );
         }
         let target = match &self.target {
@@ -249,7 +261,9 @@ impl Connection {
         if outcome.status != 0x00 {
             tracing::warn!(
                 "iscsi: SCSI CHECK CONDITION cdb[0]=0x{:02x} status=0x{:02x} sense={:02x?}",
-                cmd.cdb[0], outcome.status, &outcome.sense[..outcome.sense.len().min(14)]
+                cmd.cdb[0],
+                outcome.status,
+                &outcome.sense[..outcome.sense.len().min(14)]
             );
         }
         // READ that produced data -> chunked Data-In with status on the final PDU.
@@ -388,12 +402,14 @@ impl Connection {
     fn finish_write(&mut self, p: PendingWrite) -> Vec<Outbound> {
         // Temporary: log payload for CCboot handshake sectors so we can reverse-engineer the protocol.
         if p.cmd.cdb[0] == 0x2a || p.cmd.cdb[0] == 0x8a {
-            let lba = u32::from_be_bytes([p.cmd.cdb[2], p.cmd.cdb[3], p.cmd.cdb[4], p.cmd.cdb[5]]) as u64;
+            let lba =
+                u32::from_be_bytes([p.cmd.cdb[2], p.cmd.cdb[3], p.cmd.cdb[4], p.cmd.cdb[5]]) as u64;
             const CCBOOT_LBAS: &[u64] = &[0x62b8, 0x62be, 0x62bf, 0x2bdc8, 0x2bdcc, 0x2bdd1];
             if CCBOOT_LBAS.contains(&lba) {
                 tracing::info!(
                     "iscsi: CCBOOT WRITE lba=0x{:x} payload={:02x?}",
-                    lba, &p.buf[..p.buf.len().min(128)]
+                    lba,
+                    &p.buf[..p.buf.len().min(128)]
                 );
             }
         }

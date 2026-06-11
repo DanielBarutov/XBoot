@@ -10,6 +10,74 @@ use tracing_subscriber::EnvFilter;
 use xboot_core::iscsi::registry::TargetRegistry;
 use xboot_core::manager::ClientManager;
 
+/// `xboot flatten <input.vhd> <output.vhd>` — resolve a backing image
+/// (including any CCBoot increment chain next to `input`) into one standalone
+/// sparse dynamic VHD. The input and its increments are never modified.
+fn run_flatten(args: &[String]) -> ExitCode {
+    let (input, output) = match (args.first(), args.get(1)) {
+        (Some(i), Some(o)) => (PathBuf::from(i), PathBuf::from(o)),
+        _ => {
+            eprintln!("usage: xboot flatten <input.vhd> <output.vhd>");
+            return ExitCode::from(2);
+        }
+    };
+    if output.exists() {
+        eprintln!(
+            "refusing to overwrite existing output: {}",
+            output.display()
+        );
+        return ExitCode::FAILURE;
+    }
+
+    let source = match xboot_core::storage::open_backing(&input) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("open {}: {e}", input.display());
+            return ExitCode::FAILURE;
+        }
+    };
+    eprintln!(
+        "flatten: {} ({:.1} GiB virtual) -> {}",
+        input.display(),
+        source.size_bytes() as f64 / (1024.0 * 1024.0 * 1024.0),
+        output.display()
+    );
+
+    let start = std::time::Instant::now();
+    let last = std::cell::Cell::new(0u8);
+    let res =
+        xboot_core::storage::vhd::write_dynamic_vhd(&output, source.as_ref(), |done, total| {
+            let pct = total
+                .checked_div(100)
+                .filter(|q| *q > 0)
+                .map(|q| (done / q) as u8)
+                .unwrap_or(100);
+            if pct != last.get() {
+                last.set(pct);
+                eprint!("\rflatten: {pct:3}%  ({:.1} GiB)", done as f64 / 1.073e9);
+                use std::io::Write;
+                let _ = std::io::stderr().flush();
+            }
+        });
+    eprintln!();
+    match res {
+        Ok(()) => {
+            let secs = start.elapsed().as_secs_f64();
+            let bytes = std::fs::metadata(&output).map(|m| m.len()).unwrap_or(0);
+            eprintln!(
+                "flatten: done in {secs:.0}s, output {:.1} GiB on disk",
+                bytes as f64 / 1.073e9
+            );
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("flatten failed: {e}");
+            let _ = std::fs::remove_file(&output);
+            ExitCode::FAILURE
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() -> ExitCode {
     tracing_subscriber::fmt()
@@ -18,10 +86,16 @@ async fn main() -> ExitCode {
         )
         .init();
 
-    let path = match std::env::args().nth(1) {
+    let args: Vec<String> = std::env::args().collect();
+    if args.get(1).map(|s| s.as_str()) == Some("flatten") {
+        return run_flatten(&args[2..]);
+    }
+
+    let path = match args.get(1) {
         Some(p) => PathBuf::from(p),
         None => {
             eprintln!("usage: xboot <config.toml>");
+            eprintln!("       xboot flatten <input.vhd> <output.vhd>");
             return ExitCode::from(2);
         }
     };

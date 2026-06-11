@@ -8,10 +8,12 @@ pub mod chain;
 mod dynamic;
 mod fixed;
 pub mod footer;
+pub mod write;
 
 pub use chain::ChainedVhd;
 pub use dynamic::DynamicVhd;
 pub use fixed::FixedVhd;
+pub use write::write_dynamic_vhd;
 
 use crate::storage::file_ext::read_exact_at;
 use crate::storage::{invalid_data, BackingStore};
