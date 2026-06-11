@@ -73,12 +73,27 @@ impl BackingStore for ChainedVhd {
             let take = std::cmp::min(SECTOR as usize - within, buf.len() - done);
             let dst = &mut buf[done..done + take];
 
+            // Resolution order for one sector:
+            //  1. newest layer whose bitmap bit is set (an explicit write);
+            //  2. otherwise newest layer whose *block* is allocated — CCBoot
+            //     captures whole blocks without always setting every bit, so the
+            //     data lives there and must win over the stale base;
+            //  3. otherwise the base image.
             let mut served = false;
             for layer in &self.overlays {
                 if let Some(off) = layer.sector_offset(sector)? {
                     layer.read_phys(off + within as u64, dst)?;
                     served = true;
                     break;
+                }
+            }
+            if !served {
+                for layer in &self.overlays {
+                    if let Some(off) = layer.block_sector_offset(sector)? {
+                        layer.read_phys(off + within as u64, dst)?;
+                        served = true;
+                        break;
+                    }
                 }
             }
             if !served {

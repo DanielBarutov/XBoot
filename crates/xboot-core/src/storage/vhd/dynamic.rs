@@ -134,6 +134,29 @@ impl DynamicVhd {
         ))
     }
 
+    /// Physical byte offset of `sector`'s data if its *block* is allocated in
+    /// this file, **ignoring the per-sector bitmap**. `None` only when the block
+    /// itself is a hole. Used as a fallback in CCBoot chains: CCBoot allocates a
+    /// whole block when it captures any change in it, but does not always set the
+    /// bitmap bit for every sector it actually wrote — so a bit-clear sector in
+    /// an allocated block still holds that layer's data and must not fall through
+    /// to the (stale) base.
+    pub(crate) fn block_sector_offset(&self, sector: u64) -> io::Result<Option<u64>> {
+        let sectors_per_block = self.block_size / SECTOR;
+        let block = (sector / sectors_per_block) as usize;
+        let entry = *self
+            .bat
+            .get(block)
+            .ok_or_else(|| invalid_data("sector beyond BAT"))?;
+        if entry == 0xFFFF_FFFF {
+            return Ok(None);
+        }
+        let sector_in_block = sector % sectors_per_block;
+        Ok(Some(
+            entry as u64 * SECTOR + self.bitmap_size + sector_in_block * SECTOR,
+        ))
+    }
+
     /// Read raw bytes at a physical file offset (as returned by `sector_offset`).
     pub(crate) fn read_phys(&self, offset: u64, dst: &mut [u8]) -> io::Result<()> {
         read_exact_at(&self.file, offset, dst)
