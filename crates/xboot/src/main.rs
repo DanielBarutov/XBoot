@@ -78,6 +78,79 @@ fn run_flatten(args: &[String]) -> ExitCode {
     }
 }
 
+/// `xboot dumpranges <input.vhd> <ranges.txt> <output.bin>` — diagnostic: read a
+/// list of byte ranges from the assembled backing image (including any CCBoot
+/// increment chain) and concatenate them into `output`. Each line of `ranges.txt`
+/// is "<offset_dec> <length_dec>". Used to extract a single file (e.g. a registry
+/// hive, via its NTFS extents) straight from the chain reader, bypassing the
+/// flatten writer, so the two paths can be compared independently.
+fn run_dumpranges(args: &[String]) -> ExitCode {
+    let (input, ranges, output) = match (args.first(), args.get(1), args.get(2)) {
+        (Some(i), Some(r), Some(o)) => (PathBuf::from(i), PathBuf::from(r), PathBuf::from(o)),
+        _ => {
+            eprintln!("usage: xboot dumpranges <input.vhd> <ranges.txt> <output.bin>");
+            return ExitCode::from(2);
+        }
+    };
+    let source = match xboot_core::storage::open_backing(&input) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("open {}: {e}", input.display());
+            return ExitCode::FAILURE;
+        }
+    };
+    let text = match std::fs::read_to_string(&ranges) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("read {}: {e}", ranges.display());
+            return ExitCode::FAILURE;
+        }
+    };
+    let mut out = match std::fs::File::create(&output) {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!("create {}: {e}", output.display());
+            return ExitCode::FAILURE;
+        }
+    };
+    use std::io::Write;
+    let mut total = 0u64;
+    for (lineno, line) in text.lines().enumerate() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let mut it = line.split_whitespace();
+        let (Some(off), Some(len)) = (it.next(), it.next()) else {
+            eprintln!("line {}: expected '<offset> <length>'", lineno + 1);
+            return ExitCode::FAILURE;
+        };
+        let (off, len): (u64, u64) = match (off.parse(), len.parse()) {
+            (Ok(o), Ok(l)) => (o, l),
+            _ => {
+                eprintln!("line {}: bad numbers", lineno + 1);
+                return ExitCode::FAILURE;
+            }
+        };
+        let mut buf = vec![0u8; len as usize];
+        if let Err(e) = source.read_at(off, &mut buf) {
+            eprintln!("read {off}+{len}: {e}");
+            return ExitCode::FAILURE;
+        }
+        if let Err(e) = out.write_all(&buf) {
+            eprintln!("write: {e}");
+            return ExitCode::FAILURE;
+        }
+        total += len;
+    }
+    if let Err(e) = out.flush() {
+        eprintln!("flush: {e}");
+        return ExitCode::FAILURE;
+    }
+    eprintln!("dumpranges: wrote {total} bytes to {}", output.display());
+    ExitCode::SUCCESS
+}
+
 #[tokio::main]
 async fn main() -> ExitCode {
     tracing_subscriber::fmt()
@@ -89,6 +162,9 @@ async fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().collect();
     if args.get(1).map(|s| s.as_str()) == Some("flatten") {
         return run_flatten(&args[2..]);
+    }
+    if args.get(1).map(|s| s.as_str()) == Some("dumpranges") {
+        return run_dumpranges(&args[2..]);
     }
 
     let path = match args.get(1) {
