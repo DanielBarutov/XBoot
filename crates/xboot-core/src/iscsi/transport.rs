@@ -22,7 +22,9 @@ pub async fn serve(
                 let (sock, _peer) = result?;
                 let reg = registry.clone();
                 tokio::spawn(async move {
-                    let _ = handle_conn(sock, reg).await;
+                    if let Err(e) = handle_conn(sock, reg).await {
+                        tracing::warn!("iscsi: connection ended with error: {e}");
+                    }
                 });
             }
             _ = token.cancelled() => {
