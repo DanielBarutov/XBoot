@@ -44,6 +44,8 @@ async fn handle_conn(
     let mut conn = Connection::new(registry);
     let mut buf: Vec<u8> = Vec::with_capacity(8192);
     let mut tmp = [0u8; 8192];
+    let mut total_rx: u64 = 0;
+    let mut idle_secs: u32 = 0;
 
     loop {
         // Drain every complete PDU currently in `buf`.
@@ -67,7 +69,7 @@ async fn handle_conn(
                     let responses = conn.handle(req, &bhs);
                     for out in &responses {
                         let encoded = out.encode();
-                        let tx_op = encoded.get(0).copied().unwrap_or(0) & 0x3f;
+                        let tx_op = encoded.first().copied().unwrap_or(0) & 0x3f;
                         if tx_op == 0x25 {
                             // DATA-IN — debug only
                             tracing::debug!("iscsi: tx DATA-IN len={} to {:?}", encoded.len(), peer);
@@ -103,11 +105,45 @@ async fn handle_conn(
                 }
             }
         }
-        let n = sock.read(&mut tmp).await?;
+        // Temporary diagnostics: a CCBoot in-image driver may connect and then
+        // wait for the server to speak first — surface that silence instead of
+        // blocking invisibly inside read().
+        let n = match tokio::time::timeout(std::time::Duration::from_secs(5), sock.read(&mut tmp))
+            .await
+        {
+            Ok(r) => r?,
+            Err(_elapsed) => {
+                idle_secs += 5;
+                if idle_secs <= 15 || idle_secs % 60 == 0 {
+                    tracing::info!(
+                        "iscsi: peer {:?} silent for {}s (total_rx={} buffered={} buf[..16]={:02x?})",
+                        peer,
+                        idle_secs,
+                        total_rx,
+                        buf.len(),
+                        &buf[..buf.len().min(16)]
+                    );
+                }
+                continue;
+            }
+        };
+        idle_secs = 0;
         if n == 0 {
-            tracing::info!("iscsi: peer {:?} closed connection", peer);
+            tracing::info!(
+                "iscsi: peer {:?} closed connection (total_rx={})",
+                peer,
+                total_rx
+            );
             return Ok(()); // peer closed
         }
+        if total_rx == 0 {
+            tracing::info!(
+                "iscsi: first bytes from {:?}: {:02x?}",
+                peer,
+                &tmp[..n.min(64)]
+            );
+        }
+        total_rx += n as u64;
         buf.extend_from_slice(&tmp[..n]);
     }
 }
