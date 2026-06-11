@@ -137,10 +137,11 @@ mod factory_tests {
     fn layers_ccboot_increments_over_base_vhd() {
         let dir = std::env::temp_dir().join(format!("xboot-bs-chain-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        // Base: 8 sectors of 0xB0. Increment 001 overrides sector 0 with 0x11.
+        // Base: 8 sectors of 0xB0. Increment 001 captures block0 (carrying the
+        // current data for every sector) and explicitly writes sector 0 = 0x11.
         let base_data = vec![0xB0u8; 4096];
         std::fs::write(dir.join("c.vhd"), vhd_fix::dynamic_vhd(&base_data, 4096)).unwrap();
-        let mut inc = vec![0u8; 4096];
+        let mut inc = base_data.clone();
         inc[..512].fill(0x11);
         std::fs::write(dir.join("c.001.vhd"), vhd_fix::diff_vhd(&inc, 4096, &[0])).unwrap();
 
@@ -149,7 +150,7 @@ mod factory_tests {
         store.read_at(0, &mut buf).unwrap();
         assert!(buf.iter().all(|&b| b == 0x11), "sector 0 from increment");
         store.read_at(512, &mut buf).unwrap();
-        assert!(buf.iter().all(|&b| b == 0xB0), "sector 1 from base");
+        assert!(buf.iter().all(|&b| b == 0xB0), "sector 1 unchanged in block");
     }
 
     #[test]

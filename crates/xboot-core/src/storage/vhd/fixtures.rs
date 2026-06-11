@@ -111,9 +111,11 @@ pub(crate) fn dynamic_vhd(data: &[u8], block_size: u32) -> Vec<u8> {
 
 /// A CCBoot-style increment layer: a dynamic VHD whose per-sector bitmap marks
 /// only `present` sectors. Blocks containing at least one present sector are
-/// allocated; sector data comes from `data` (full virtual size). Absent sectors
-/// inside allocated blocks carry garbage (0xEE) so tests catch any reader that
-/// trusts block allocation instead of the bitmap.
+/// allocated and carry the full `data` bytes for *every* sector of the block —
+/// matching CCBoot, which captures a whole 2 MiB block but only sets bitmap bits
+/// for the sectors it considers explicitly written. So an allocated block's
+/// bit-clear sectors still hold this layer's data (`data`) and must win over the
+/// base, never read as zero and never fall through.
 pub(crate) fn diff_vhd(data: &[u8], block_size: u32, present: &[u64]) -> Vec<u8> {
     let bs = block_size as usize;
     assert!(bs.is_multiple_of(512) && bs.is_power_of_two());
@@ -162,19 +164,18 @@ pub(crate) fn diff_vhd(data: &[u8], block_size: u32, present: &[u64]) -> Vec<u8>
         if bat[i] == 0xFFFF_FFFF {
             continue;
         }
+        // The whole block carries this layer's data; the bitmap only records
+        // which sectors were "explicitly written".
         let mut bitmap = vec![0u8; bitmap_size as usize];
-        let mut block_data = vec![0xEEu8; bs];
         for &s in present {
             if s / sectors_per_block != i as u64 {
                 continue;
             }
             let within = (s % sectors_per_block) as usize;
             bitmap[within / 8] |= 1 << (7 - within % 8);
-            block_data[within * 512..(within + 1) * 512]
-                .copy_from_slice(&chunk[within * 512..(within + 1) * 512]);
         }
         out.extend_from_slice(&bitmap);
-        out.extend_from_slice(&block_data);
+        out.extend_from_slice(chunk);
     }
 
     out.extend_from_slice(&footer(3, virtual_size, 512));

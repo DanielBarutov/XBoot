@@ -111,17 +111,6 @@ impl DynamicVhd {
             return Ok(None);
         }
         let sector_in_block = sector % sectors_per_block;
-        // DIAGNOSTIC TOGGLE: with XBOOT_IGNORE_BITMAP set, an allocated block is
-        // treated as fully owning all its sectors (the standard dynamic-VHD
-        // "whole block present" semantic) instead of consulting the per-sector
-        // bitmap. Used to test whether CCBoot increments use the bitmap for
-        // parent fall-through at all.
-        static IGNORE_BITMAP: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-        if *IGNORE_BITMAP.get_or_init(|| std::env::var_os("XBOOT_IGNORE_BITMAP").is_some()) {
-            return Ok(Some(
-                entry as u64 * SECTOR + self.bitmap_size + sector_in_block * SECTOR,
-            ));
-        }
         let bitmap = self.bitmaps[block]
             .as_ref()
             .ok_or_else(|| invalid_data("allocated block without bitmap"))?;

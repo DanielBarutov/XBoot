@@ -173,22 +173,35 @@ mod tests {
         data[s..s + 512].fill(byte);
     }
 
-    /// base: sectors filled 0xB0; layer1 overrides sector 1 with 0x11;
-    /// layer2 (newer) overrides sectors 1 and 9 with 0x22.
+    /// Two 8-sector blocks (BS = 4096). Models a realistic CCBoot chain where
+    /// each increment captures whole blocks (carrying the then-current data for
+    /// every sector) and only sets bitmap bits for the sectors it explicitly
+    /// wrote.
+    ///
+    /// base : all 0xB0, except sector 0 = 0xB1.
+    /// .001 : captures block0; bit-set sector 1 = 0x11; rest of block0 = base.
+    /// .002 : captures block0 and block1; bit-set sector 1 = 0x22, sector 9 =
+    ///        0x22; sector 8 (bit CLEAR) = 0xC8 to prove block data — not the
+    ///        base — fills bit-clear sectors of an allocated block.
     fn build_chain(dir: &Path) -> ChainedVhd {
         let mut base_data = vec![0xB0u8; BS as usize * 2]; // 16 sectors
         sector_fill(&mut base_data, 0, 0xB1);
         let base_path = dir.join("img.vhd");
         std::fs::write(&base_path, fixtures::dynamic_vhd(&base_data, BS)).unwrap();
 
-        let mut l1 = vec![0u8; BS as usize * 2];
+        // .001 captures block0 only.
+        let mut l1 = base_data.clone();
         sector_fill(&mut l1, 1, 0x11);
+        // Block1 of l1 is irrelevant (unallocated); zero it for clarity.
+        l1[BS as usize..].fill(0);
         let p1 = dir.join("img.001.vhd");
         std::fs::write(&p1, fixtures::diff_vhd(&l1, BS, &[1])).unwrap();
 
-        let mut l2 = vec![0u8; BS as usize * 2];
+        // .002 captures block0 and block1.
+        let mut l2 = base_data.clone();
         sector_fill(&mut l2, 1, 0x22);
         sector_fill(&mut l2, 9, 0x22);
+        sector_fill(&mut l2, 8, 0xC8); // present in block but bit stays clear
         let p2 = dir.join("img.002.vhd");
         std::fs::write(&p2, fixtures::diff_vhd(&l2, BS, &[1, 9])).unwrap();
 
@@ -197,40 +210,65 @@ mod tests {
     }
 
     #[test]
-    fn newest_layer_wins_and_base_falls_through() {
+    fn newest_bit_set_layer_wins_then_base() {
         let dir = tmp_dir("basic");
         let chain = build_chain(&dir);
 
         let mut buf = vec![0u8; 512];
-        chain.read_at(0, &mut buf).unwrap(); // sector 0: only base has it
-        assert!(buf.iter().all(|&b| b == 0xB1));
+        chain.read_at(0, &mut buf).unwrap(); // sector 0: unchanged, 0xB1
+        assert!(buf.iter().all(|&b| b == 0xB1), "sector 0 = 0x{:02X}", buf[0]);
 
-        chain.read_at(512, &mut buf).unwrap(); // sector 1: layer2 beats layer1
-        assert!(buf.iter().all(|&b| b == 0x22));
+        chain.read_at(512, &mut buf).unwrap(); // sector 1: layer2 bit-set beats layer1
+        assert!(buf.iter().all(|&b| b == 0x22), "sector 1 = 0x{:02X}", buf[0]);
 
         chain.read_at(9 * 512, &mut buf).unwrap(); // sector 9: only layer2
-        assert!(buf.iter().all(|&b| b == 0x22));
+        assert!(buf.iter().all(|&b| b == 0x22), "sector 9 = 0x{:02X}", buf[0]);
 
-        chain.read_at(2 * 512, &mut buf).unwrap(); // sector 2: base
-        assert!(buf.iter().all(|&b| b == 0xB0));
+        chain.read_at(2 * 512, &mut buf).unwrap(); // sector 2: unchanged, 0xB0
+        assert!(buf.iter().all(|&b| b == 0xB0), "sector 2 = 0x{:02X}", buf[0]);
     }
 
     #[test]
-    fn allocated_block_with_clear_bit_falls_through_to_base() {
-        // Sector 9's block is allocated in layer2 (sector 9 present), but
-        // sector 8 in that same block has bit=0 — it must come from the BASE,
-        // not read as zero. This is the CCBoot semantic the plain dynamic
-        // reader gets wrong.
-        let dir = tmp_dir("fallthrough");
+    fn clear_bit_in_allocated_block_reads_block_data_not_base() {
+        // Sector 8 lives in block1, which only layer2 captured. Its bitmap bit is
+        // clear, but layer2's block carries 0xC8 there. The read must return that
+        // block data (0xC8), NOT the base's 0xB0 and NOT zero. This is the CCBoot
+        // semantic: a captured block owns its bit-clear sectors over the base.
+        let dir = tmp_dir("blockdata");
         let chain = build_chain(&dir);
 
         let mut buf = vec![0u8; 512];
         chain.read_at(8 * 512, &mut buf).unwrap();
         assert!(
-            buf.iter().all(|&b| b == 0xB0),
-            "sector 8 must fall through to base, got 0x{:02X}",
+            buf.iter().all(|&b| b == 0xC8),
+            "sector 8 must read layer2 block data 0xC8, got 0x{:02X}",
             buf[0]
         );
+    }
+
+    #[test]
+    fn sector_in_unallocated_block_falls_through_to_base() {
+        // Sector 10 is in block1; layer2 captured block1, so it is owned by
+        // layer2's block data (= base 0xB0 there). Sector 7 is in block0; both
+        // layers captured block0, newest (layer2) block data = base 0xB0.
+        // Use a fresh chain where block1 is captured by NO layer to exercise the
+        // pure base path.
+        let dir = tmp_dir("baseonly");
+        let mut base_data = vec![0xB0u8; BS as usize * 2];
+        sector_fill(&mut base_data, 12, 0xBC);
+        let base_path = dir.join("b.vhd");
+        std::fs::write(&base_path, fixtures::dynamic_vhd(&base_data, BS)).unwrap();
+        // Increment captures block0 only.
+        let mut l1 = base_data.clone();
+        sector_fill(&mut l1, 1, 0x11);
+        let p1 = dir.join("b.001.vhd");
+        std::fs::write(&p1, fixtures::diff_vhd(&l1, BS, &[1])).unwrap();
+        let base = crate::storage::vhd::Vhd::open(&base_path).unwrap();
+        let chain = ChainedVhd::open(base, &[p1]).unwrap();
+
+        let mut buf = vec![0u8; 512];
+        chain.read_at(12 * 512, &mut buf).unwrap(); // block1 unallocated -> base
+        assert!(buf.iter().all(|&b| b == 0xBC), "sector 12 = 0x{:02X}", buf[0]);
     }
 
     #[test]
@@ -238,7 +276,7 @@ mod tests {
         let dir = tmp_dir("span");
         let chain = build_chain(&dir);
 
-        // Sectors 0..3: base(0xB1), layer2(0x22), base(0xB0).
+        // Sectors 0..3: 0xB1 (unchanged), 0x22 (layer2 write), 0xB0 (unchanged).
         let mut buf = vec![0u8; 512 * 3];
         chain.read_at(0, &mut buf).unwrap();
         assert!(buf[..512].iter().all(|&b| b == 0xB1));
