@@ -106,6 +106,47 @@ impl BackingStore for ChainedVhd {
     }
 }
 
+/// Diagnostic: for one virtual byte `offset`, report what each layer (newest
+/// first) and the base hold for that sector — whether the block is allocated,
+/// whether the bitmap bit is set, and the first 8 raw bytes. Used to reverse-
+/// engineer CCBoot's exact increment semantics.
+pub fn probe(base_path: &Path, offset: u64) -> io::Result<String> {
+    use std::fmt::Write as _;
+    let increments = find_increments(base_path);
+    let sector = offset / SECTOR;
+    let mut s = String::new();
+    writeln!(s, "probe offset {offset} (sector {sector}):").ok();
+    // Newest first.
+    for path in increments.iter().rev() {
+        let layer = DynamicVhd::open(path)?;
+        let bitset = layer.sector_offset(sector)?;
+        let block = layer.block_sector_offset(sector)?;
+        let mut raw = [0u8; 8];
+        let (alloc, bytes) = match block {
+            Some(off) => {
+                layer.read_phys(off, &mut raw)?;
+                (true, format!("{raw:02x?}"))
+            }
+            None => (false, "----".to_string()),
+        };
+        writeln!(
+            s,
+            "  {:<16} alloc={} bitset={} raw8={}",
+            path.file_name().unwrap().to_string_lossy(),
+            alloc,
+            bitset.is_some(),
+            bytes
+        )
+        .ok();
+    }
+    // Base.
+    let base = crate::storage::vhd::Vhd::open(base_path)?;
+    let mut raw = [0u8; 8];
+    base.read_at(offset, &mut raw)?;
+    writeln!(s, "  {:<16} base raw8={:02x?}", "BASE", raw).ok();
+    Ok(s)
+}
+
 /// Find CCBoot increment files next to `base` (`stem.001.ext`, `stem.002.ext`,
 /// ...), matched case-insensitively, returned sorted oldest -> newest.
 pub fn find_increments(base: &Path) -> Vec<PathBuf> {

@@ -166,6 +166,29 @@ async fn main() -> ExitCode {
     if args.get(1).map(|s| s.as_str()) == Some("dumpranges") {
         return run_dumpranges(&args[2..]);
     }
+    if args.get(1).map(|s| s.as_str()) == Some("probe") {
+        let (Some(base), Some(off)) = (args.get(2), args.get(3)) else {
+            eprintln!("usage: xboot probe <base.vhd> <offset>");
+            return ExitCode::from(2);
+        };
+        let off: u64 = match off.parse() {
+            Ok(v) => v,
+            Err(_) => {
+                eprintln!("bad offset");
+                return ExitCode::from(2);
+            }
+        };
+        match xboot_core::storage::vhd::chain::probe(std::path::Path::new(base), off) {
+            Ok(s) => {
+                print!("{s}");
+                return ExitCode::SUCCESS;
+            }
+            Err(e) => {
+                eprintln!("probe: {e}");
+                return ExitCode::FAILURE;
+            }
+        }
+    }
 
     let path = match args.get(1) {
         Some(p) => PathBuf::from(p),
