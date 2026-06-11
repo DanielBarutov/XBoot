@@ -154,6 +154,25 @@ impl DynamicVhd {
         ))
     }
 
+    /// Number of bitmap bits set in `sector`'s block, or `None` if the block is a
+    /// hole. Diagnostic: a CCBoot increment may allocate a block with no bits set
+    /// (a phantom block that should defer to the parent) vs. one it truly owns.
+    pub(crate) fn block_bit_count(&self, sector: u64) -> io::Result<Option<u32>> {
+        let sectors_per_block = self.block_size / SECTOR;
+        let block = (sector / sectors_per_block) as usize;
+        let entry = *self
+            .bat
+            .get(block)
+            .ok_or_else(|| invalid_data("sector beyond BAT"))?;
+        if entry == 0xFFFF_FFFF {
+            return Ok(None);
+        }
+        let bitmap = self.bitmaps[block]
+            .as_ref()
+            .ok_or_else(|| invalid_data("allocated block without bitmap"))?;
+        Ok(Some(bitmap.iter().map(|b| b.count_ones()).sum()))
+    }
+
     /// Read raw bytes at a physical file offset (as returned by `sector_offset`).
     pub(crate) fn read_phys(&self, offset: u64, dst: &mut [u8]) -> io::Result<()> {
         read_exact_at(&self.file, offset, dst)

@@ -121,6 +121,7 @@ pub fn probe(base_path: &Path, offset: u64) -> io::Result<String> {
         let layer = DynamicVhd::open(path)?;
         let bitset = layer.sector_offset(sector)?;
         let block = layer.block_sector_offset(sector)?;
+        let bits = layer.block_bit_count(sector)?;
         let mut raw = [0u8; 8];
         let (alloc, bytes) = match block {
             Some(off) => {
@@ -131,9 +132,10 @@ pub fn probe(base_path: &Path, offset: u64) -> io::Result<String> {
         };
         writeln!(
             s,
-            "  {:<16} alloc={} bitset={} raw8={}",
+            "  {:<16} alloc={} blockbits={:?} bitset={} raw8={}",
             path.file_name().unwrap().to_string_lossy(),
             alloc,
+            bits,
             bitset.is_some(),
             bytes
         )
