@@ -213,18 +213,22 @@ impl Connection {
     /// Response. `bhs` is kept for Task 5's protocol rejects.
     fn scsi_command(&mut self, cmd: crate::iscsi::ScsiCommand, _bhs: &[u8]) -> Vec<Outbound> {
         let opcode = cmd.cdb[0];
-        if opcode != 0x28 && opcode != 0x88 {
-            // log non-READ commands at info; READs are debug-only to avoid spam
+        if opcode == 0x28 || opcode == 0x88 {
+            let lba = if opcode == 0x28 {
+                u32::from_be_bytes([cmd.cdb[2], cmd.cdb[3], cmd.cdb[4], cmd.cdb[5]]) as u64
+            } else {
+                u64::from_be_bytes([cmd.cdb[2], cmd.cdb[3], cmd.cdb[4], cmd.cdb[5], cmd.cdb[6], cmd.cdb[7], cmd.cdb[8], cmd.cdb[9]])
+            };
+            let blocks = if opcode == 0x28 {
+                u16::from_be_bytes([cmd.cdb[7], cmd.cdb[8]]) as u64
+            } else {
+                u32::from_be_bytes([cmd.cdb[10], cmd.cdb[11], cmd.cdb[12], cmd.cdb[13]]) as u64
+            };
+            tracing::info!("iscsi: READ lun={} lba=0x{:x} blocks={}", cmd.lun, lba, blocks);
+        } else {
             tracing::info!(
                 "iscsi: SCSI cmd lun={} cdb={:02x?} edtl={} read={} write={}",
                 cmd.lun, &cmd.cdb[..cmd.cdb.len().min(10)], cmd.edtl, cmd.read, cmd.write
-            );
-        } else {
-            tracing::debug!(
-                "iscsi: SCSI READ lun={} lba=0x{:08x} blocks={}",
-                cmd.lun,
-                u32::from_be_bytes([cmd.cdb[2], cmd.cdb[3], cmd.cdb[4], cmd.cdb[5]]),
-                u16::from_be_bytes([cmd.cdb[7], cmd.cdb[8]])
             );
         }
         let target = match &self.target {
@@ -382,6 +386,17 @@ impl Connection {
 
     /// Run the assembled write through the SCSI target and build the SCSI Response.
     fn finish_write(&mut self, p: PendingWrite) -> Vec<Outbound> {
+        // Temporary: log payload for CCboot handshake sectors so we can reverse-engineer the protocol.
+        if p.cmd.cdb[0] == 0x2a || p.cmd.cdb[0] == 0x8a {
+            let lba = u32::from_be_bytes([p.cmd.cdb[2], p.cmd.cdb[3], p.cmd.cdb[4], p.cmd.cdb[5]]) as u64;
+            const CCBOOT_LBAS: &[u64] = &[0x62b8, 0x62be, 0x62bf, 0x2bdc8, 0x2bdcc, 0x2bdd1];
+            if CCBOOT_LBAS.contains(&lba) {
+                tracing::info!(
+                    "iscsi: CCBOOT WRITE lba=0x{:x} payload={:02x?}",
+                    lba, &p.buf[..p.buf.len().min(128)]
+                );
+            }
+        }
         let target = self.target.clone().expect("target resolved in FullFeature");
         let outcome = target.execute(&p.cmd, &p.buf);
         vec![Outbound::ScsiResp(ScsiResponse {
