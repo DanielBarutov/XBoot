@@ -53,6 +53,11 @@ pub fn open_backing(path: &Path) -> io::Result<Box<dyn BackingStore>> {
             // CCBoot-style increments (`name.001.vhd`, ...) next to the base
             // override it sector-by-sector; without them clients see a stale
             // image, so they must be layered in whenever present.
+            // DIAGNOSTIC: XBOOT_NO_CHAIN opens the base alone, ignoring its
+            // CCBoot increments, so a single layer can be inspected.
+            if std::env::var_os("XBOOT_NO_CHAIN").is_some() {
+                return Ok(base);
+            }
             let increments = vhd::chain::find_increments(path);
             if increments.is_empty() {
                 return Ok(base);

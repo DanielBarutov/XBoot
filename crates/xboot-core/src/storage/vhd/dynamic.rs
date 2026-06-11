@@ -111,6 +111,14 @@ impl DynamicVhd {
             return Ok(None);
         }
         let sector_in_block = sector % sectors_per_block;
+        // DIAGNOSTIC: XBOOT_IGNORE_BITMAP treats any allocated block as fully
+        // present (raw block data), bypassing the per-sector bitmap.
+        static IGNORE_BITMAP: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        if *IGNORE_BITMAP.get_or_init(|| std::env::var_os("XBOOT_IGNORE_BITMAP").is_some()) {
+            return Ok(Some(
+                entry as u64 * SECTOR + self.bitmap_size + sector_in_block * SECTOR,
+            ));
+        }
         let bitmap = self.bitmaps[block]
             .as_ref()
             .ok_or_else(|| invalid_data("allocated block without bitmap"))?;
