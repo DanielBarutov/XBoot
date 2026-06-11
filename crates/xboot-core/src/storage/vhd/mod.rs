@@ -4,10 +4,12 @@
 use std::io;
 use std::path::Path;
 
+pub mod chain;
 mod dynamic;
 mod fixed;
 pub mod footer;
 
+pub use chain::ChainedVhd;
 pub use dynamic::DynamicVhd;
 pub use fixed::FixedVhd;
 

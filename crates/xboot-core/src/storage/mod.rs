@@ -49,7 +49,21 @@ pub fn open_backing(path: &Path) -> io::Result<Box<dyn BackingStore>> {
         let mut cookie = [0u8; 8];
         read_exact_at(&file, len - 512, &mut cookie)?;
         if &cookie == b"conectix" {
-            return Vhd::open(path);
+            let base = Vhd::open(path)?;
+            // CCBoot-style increments (`name.001.vhd`, ...) next to the base
+            // override it sector-by-sector; without them clients see a stale
+            // image, so they must be layered in whenever present.
+            let increments = vhd::chain::find_increments(path);
+            if increments.is_empty() {
+                return Ok(base);
+            }
+            tracing::info!(
+                base = %path.display(),
+                layers = increments.len(),
+                newest = %increments.last().unwrap().display(),
+                "vhd: layering CCBoot increment chain over base image"
+            );
+            return Ok(Box::new(vhd::ChainedVhd::open(base, &increments)?));
         }
     }
 
@@ -117,6 +131,25 @@ mod factory_tests {
         let p = write_tmp("b.vhd", &vhd_fix::dynamic_vhd(&[3u8; 8192], 4096));
         let store = open_backing(&p).unwrap();
         assert_eq!(store.size_bytes(), 8192);
+    }
+
+    #[test]
+    fn layers_ccboot_increments_over_base_vhd() {
+        let dir = std::env::temp_dir().join(format!("xboot-bs-chain-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // Base: 8 sectors of 0xB0. Increment 001 overrides sector 0 with 0x11.
+        let base_data = vec![0xB0u8; 4096];
+        std::fs::write(dir.join("c.vhd"), vhd_fix::dynamic_vhd(&base_data, 4096)).unwrap();
+        let mut inc = vec![0u8; 4096];
+        inc[..512].fill(0x11);
+        std::fs::write(dir.join("c.001.vhd"), vhd_fix::diff_vhd(&inc, 4096, &[0])).unwrap();
+
+        let store = open_backing(&dir.join("c.vhd")).unwrap();
+        let mut buf = [0u8; 512];
+        store.read_at(0, &mut buf).unwrap();
+        assert!(buf.iter().all(|&b| b == 0x11), "sector 0 from increment");
+        store.read_at(512, &mut buf).unwrap();
+        assert!(buf.iter().all(|&b| b == 0xB0), "sector 1 from base");
     }
 
     #[test]

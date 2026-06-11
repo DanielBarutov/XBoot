@@ -109,6 +109,79 @@ pub(crate) fn dynamic_vhd(data: &[u8], block_size: u32) -> Vec<u8> {
     out
 }
 
+/// A CCBoot-style increment layer: a dynamic VHD whose per-sector bitmap marks
+/// only `present` sectors. Blocks containing at least one present sector are
+/// allocated; sector data comes from `data` (full virtual size). Absent sectors
+/// inside allocated blocks carry garbage (0xEE) so tests catch any reader that
+/// trusts block allocation instead of the bitmap.
+pub(crate) fn diff_vhd(data: &[u8], block_size: u32, present: &[u64]) -> Vec<u8> {
+    let bs = block_size as usize;
+    assert!(bs.is_multiple_of(512) && bs.is_power_of_two());
+    assert!(
+        data.len().is_multiple_of(bs),
+        "data must be a multiple of block_size"
+    );
+    let virtual_size = data.len() as u64;
+    let n_blocks = (data.len() / bs) as u32;
+    let sectors_per_block = (block_size / 512) as u64;
+    let bitmap_bytes_raw = sectors_per_block.div_ceil(8);
+    let bitmap_size = bitmap_bytes_raw.div_ceil(512) * 512;
+
+    let table_offset: u64 = 512 + 1024;
+    let bat_bytes = (n_blocks as u64) * 4;
+    let bat_padded = bat_bytes.div_ceil(512) * 512;
+    let blocks_start = table_offset + bat_padded;
+
+    let mut out = Vec::new();
+    out.extend_from_slice(&footer(3, virtual_size, 512));
+
+    let mut hdr = [0u8; 1024];
+    hdr[0..8].copy_from_slice(b"cxsparse");
+    hdr[8..16].copy_from_slice(&u64::MAX.to_be_bytes());
+    hdr[16..24].copy_from_slice(&table_offset.to_be_bytes());
+    hdr[24..28].copy_from_slice(&0x0001_0000u32.to_be_bytes());
+    hdr[28..32].copy_from_slice(&n_blocks.to_be_bytes());
+    hdr[32..36].copy_from_slice(&block_size.to_be_bytes());
+    out.extend_from_slice(&hdr);
+
+    let block_has_present =
+        |i: usize| present.iter().any(|&s| s / sectors_per_block == i as u64);
+    let mut bat = vec![0xFFFF_FFFFu32; n_blocks as usize];
+    let mut next_block_sector = (blocks_start / 512) as u32;
+    for (i, entry) in bat.iter_mut().enumerate() {
+        if block_has_present(i) {
+            *entry = next_block_sector;
+            next_block_sector += ((bitmap_size + block_size as u64) / 512) as u32;
+        }
+    }
+    for entry in &bat {
+        out.extend_from_slice(&entry.to_be_bytes());
+    }
+    out.resize(blocks_start as usize, 0);
+
+    for (i, chunk) in data.chunks(bs).enumerate() {
+        if bat[i] == 0xFFFF_FFFF {
+            continue;
+        }
+        let mut bitmap = vec![0u8; bitmap_size as usize];
+        let mut block_data = vec![0xEEu8; bs];
+        for &s in present {
+            if s / sectors_per_block != i as u64 {
+                continue;
+            }
+            let within = (s % sectors_per_block) as usize;
+            bitmap[within / 8] |= 1 << (7 - within % 8);
+            block_data[within * 512..(within + 1) * 512]
+                .copy_from_slice(&chunk[within * 512..(within + 1) * 512]);
+        }
+        out.extend_from_slice(&bitmap);
+        out.extend_from_slice(&block_data);
+    }
+
+    out.extend_from_slice(&footer(3, virtual_size, 512));
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

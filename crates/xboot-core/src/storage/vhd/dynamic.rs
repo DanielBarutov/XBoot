@@ -17,6 +17,8 @@ pub struct DynamicVhd {
     bitmap_size: u64,
     /// One BAT entry per block: sector offset of the block, or `0xFFFFFFFF`.
     bat: Vec<u32>,
+    /// Per-block sector bitmaps, preloaded for allocated blocks (None = hole).
+    bitmaps: Vec<Option<Box<[u8]>>>,
 }
 
 fn be_u32(b: &[u8]) -> u32 {
@@ -72,13 +74,58 @@ impl DynamicVhd {
         read_exact_at(&file, table_offset, &mut raw)?;
         let bat: Vec<u32> = raw.chunks_exact(4).map(be_u32).collect();
 
+        // Preload sector bitmaps so reads never touch the disk to test a bit.
+        let mut bitmaps = Vec::with_capacity(bat.len());
+        for &entry in &bat {
+            if entry == 0xFFFF_FFFF {
+                bitmaps.push(None);
+            } else {
+                let mut bm = vec![0u8; bitmap_size as usize];
+                read_exact_at(&file, entry as u64 * SECTOR, &mut bm)?;
+                bitmaps.push(Some(bm.into_boxed_slice()));
+            }
+        }
+
         Ok(Self {
             file,
             virtual_size,
             block_size,
             bitmap_size,
             bat,
+            bitmaps,
         })
+    }
+
+    /// Physical byte offset of `sector`'s data if the sector is present in
+    /// this file: its block is allocated *and* its bitmap bit is set.
+    /// `None` means the sector is not stored here (zero for a standalone
+    /// dynamic VHD; "ask the parent layer" in a CCBoot increment chain).
+    pub(crate) fn sector_offset(&self, sector: u64) -> io::Result<Option<u64>> {
+        let sectors_per_block = self.block_size / SECTOR;
+        let block = (sector / sectors_per_block) as usize;
+        let entry = *self
+            .bat
+            .get(block)
+            .ok_or_else(|| invalid_data("sector beyond BAT"))?;
+        if entry == 0xFFFF_FFFF {
+            return Ok(None);
+        }
+        let sector_in_block = sector % sectors_per_block;
+        let bitmap = self.bitmaps[block]
+            .as_ref()
+            .ok_or_else(|| invalid_data("allocated block without bitmap"))?;
+        let byte = bitmap[(sector_in_block / 8) as usize];
+        if byte & (1 << (7 - sector_in_block % 8)) == 0 {
+            return Ok(None);
+        }
+        Ok(Some(
+            entry as u64 * SECTOR + self.bitmap_size + sector_in_block * SECTOR,
+        ))
+    }
+
+    /// Read raw bytes at a physical file offset (as returned by `sector_offset`).
+    pub(crate) fn read_phys(&self, offset: u64, dst: &mut [u8]) -> io::Result<()> {
+        read_exact_at(&self.file, offset, dst)
     }
 }
 
@@ -95,27 +142,10 @@ impl BackingStore for DynamicVhd {
             self.virtual_size,
             SECTOR,
             |sector| {
-                let block = (sector / (self.block_size / SECTOR)) as usize;
-                let entry = *self
-                    .bat
-                    .get(block)
-                    .ok_or_else(|| invalid_data("sector beyond BAT"))?;
-                if entry == 0xFFFF_FFFF {
-                    return Ok(Unit::Zero);
-                }
-                let block_start = entry as u64 * SECTOR;
-                let sector_in_block = sector % (self.block_size / SECTOR);
-
-                // Consult the per-sector bitmap (MSB-first).
-                let byte_idx = sector_in_block / 8;
-                let bit = 7 - (sector_in_block % 8);
-                let mut one = [0u8; 1];
-                read_exact_at(&self.file, block_start + byte_idx, &mut one)?;
-                if one[0] & (1 << bit) == 0 {
-                    return Ok(Unit::Zero);
-                }
-                let data_off = block_start + self.bitmap_size + sector_in_block * SECTOR;
-                Ok(Unit::At(data_off))
+                Ok(match self.sector_offset(sector)? {
+                    None => Unit::Zero,
+                    Some(off) => Unit::At(off),
+                })
             },
             |phys_off, dst| read_exact_at(&self.file, phys_off, dst),
         )
