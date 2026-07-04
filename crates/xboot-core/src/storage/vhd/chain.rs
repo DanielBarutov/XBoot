@@ -259,16 +259,32 @@ mod tests {
 
         let mut buf = vec![0u8; 512];
         chain.read_at(0, &mut buf).unwrap(); // sector 0: unchanged, 0xB1
-        assert!(buf.iter().all(|&b| b == 0xB1), "sector 0 = 0x{:02X}", buf[0]);
+        assert!(
+            buf.iter().all(|&b| b == 0xB1),
+            "sector 0 = 0x{:02X}",
+            buf[0]
+        );
 
         chain.read_at(512, &mut buf).unwrap(); // sector 1: layer2 bit-set beats layer1
-        assert!(buf.iter().all(|&b| b == 0x22), "sector 1 = 0x{:02X}", buf[0]);
+        assert!(
+            buf.iter().all(|&b| b == 0x22),
+            "sector 1 = 0x{:02X}",
+            buf[0]
+        );
 
         chain.read_at(9 * 512, &mut buf).unwrap(); // sector 9: only layer2
-        assert!(buf.iter().all(|&b| b == 0x22), "sector 9 = 0x{:02X}", buf[0]);
+        assert!(
+            buf.iter().all(|&b| b == 0x22),
+            "sector 9 = 0x{:02X}",
+            buf[0]
+        );
 
         chain.read_at(2 * 512, &mut buf).unwrap(); // sector 2: unchanged, 0xB0
-        assert!(buf.iter().all(|&b| b == 0xB0), "sector 2 = 0x{:02X}", buf[0]);
+        assert!(
+            buf.iter().all(|&b| b == 0xB0),
+            "sector 2 = 0x{:02X}",
+            buf[0]
+        );
     }
 
     #[test]
@@ -311,7 +327,11 @@ mod tests {
 
         let mut buf = vec![0u8; 512];
         chain.read_at(12 * 512, &mut buf).unwrap(); // block1 unallocated -> base
-        assert!(buf.iter().all(|&b| b == 0xBC), "sector 12 = 0x{:02X}", buf[0]);
+        assert!(
+            buf.iter().all(|&b| b == 0xBC),
+            "sector 12 = 0x{:02X}",
+            buf[0]
+        );
     }
 
     #[test]

@@ -155,7 +155,10 @@ mod factory_tests {
         store.read_at(0, &mut buf).unwrap();
         assert!(buf.iter().all(|&b| b == 0x11), "sector 0 from increment");
         store.read_at(512, &mut buf).unwrap();
-        assert!(buf.iter().all(|&b| b == 0xB0), "sector 1 unchanged in block");
+        assert!(
+            buf.iter().all(|&b| b == 0xB0),
+            "sector 1 unchanged in block"
+        );
     }
 
     #[test]
