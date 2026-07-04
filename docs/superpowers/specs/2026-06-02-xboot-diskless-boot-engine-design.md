@@ -86,7 +86,17 @@ XBoot — один кросс-платформенный бинарник на R
 5. **Disk/Client Manager** — управляет дисками (типы Image/Game/Writeback) и клиентами
    (MAC → образ + тома + writeback-политика). В v1 — через TOML.
 
-6. **Storage abstraction**
+6. **Image Patcher** (`Patcher/`, вне бинарника xboot) — офлайн-подготовка Windows-образа
+   к iSCSI-загрузке. Ядро Windows после передачи эстафеты от iPXE переходит на собственные
+   драйверы; если драйвер сетевой карты в образе не boot-start (`Start=0`) и не привязан к
+   устройству — iSCSI-сессия обрывается на логотипе Windows. Патчер правит куст SYSTEM
+   смонтированного VHD/VHDX (boot-start NIC + `iScsiPrt` + `Tcpip`, удаление `StartOverride`,
+   `CriticalDeviceDatabase`, отключение Fast Startup, анти-энергосберегающие твики адаптера)
+   и умеет инжектить PnP-состояние драйвера, снятое с эталонной машины (аналог базы сетевых
+   драйверов CCBoot). Реализации: PowerShell (Windows, основная) и guestfish+hivex (Linux).
+   Подробности: `Patcher/README.md`.
+
+7. **Storage abstraction**
    - Трейт `BackingStore` (чтение/запись блоков); реализации: VHD, VHDX, raw-файл, сырой том.
    - Трейт `NetIo` — прячет платформенные различия сети (Windows захват пакетов / Linux raw-сокеты).
    - **Цепочки инкрементов CCBoot.** CCBoot хранит мастер-образ как базовый VHD + нумерованные
@@ -234,4 +244,5 @@ writeback  = "wb-nvme"
 - Захват образа с эталонной машины.
 - Раздача игр по SMB как опция.
 - Группы машин в конфиге.
-- Подготовка Windows-образа (инжект iSCSI-boot, SAN policy) — отдельная под-задача.
+- ~~Подготовка Windows-образа (инжект iSCSI-boot, SAN policy)~~ — сделано: `Patcher/`
+  (см. §Подсистемы п. 6 и `Patcher/README.md`).

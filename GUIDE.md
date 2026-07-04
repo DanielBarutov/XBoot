@@ -146,8 +146,18 @@ XBoot поддерживает три формата:
 - **`.raw`** — сырые образы (только для тестов)
 
 **Системный образ (image):**
-Подготовьте эталонную Windows-машину (см. отдельное руководство по инжекту iSCSI-boot
-драйверов) и сохраните её как VHDX.
+Подготовьте эталонную Windows-машину и сохраните её как VHD/VHDX. Затем **обязательно
+пропатчите образ** под iSCSI-загрузку — иначе Windows доходит до логотипа и теряет
+сеть (драйвер сетевой карты не boot-start). Патчер и инструкция: [`Patcher/README.md`](Patcher/README.md):
+
+```powershell
+# Windows
+.\Patcher\Patch-XbootImage.ps1 -ImagePath D:\images\win11.vhd
+```
+```bash
+# Linux
+./Patcher/patch-image-linux.sh /data/xboot/win11.vhd
+```
 
 **Игровой диск (game):**
 Общий read-only диск с играми. Может быть большим (1-4 ТБ VHDX).
@@ -318,6 +328,7 @@ RUST_LOG=xboot_core::net=debug xboot config.toml  # только сеть
 | `boot.tftp_root ... is not a directory` | директория TFTP не существует | создайте или укажите правильный путь |
 | `failed to open backing store` | файл VHD/VHDX не найден | проверьте пути в `[[disk]]` |
 | `unknown target IQN` (iSCSI) | клиент пытается подключиться без предварительного HTTP-запроса | убедитесь, что iPXE доходит до HTTP-запроса |
+| клиент доходит до логотипа Windows и виснет / iSCSI-дисконнект | образ не пропатчен: драйвер сетевой карты не boot-start | пропатчите образ — [`Patcher/README.md`](Patcher/README.md) |
 | `address in use` | порт занят другим процессом | проверьте `ss -tulnp`, освободите порт |
 
 ---
